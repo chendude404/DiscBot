@@ -1,0 +1,6 @@
+discord.py
+claude-agent-sdk
+python-dotenv
+python-pptx
+pillow
+tzdata

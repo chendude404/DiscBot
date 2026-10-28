@@ -1,0 +1,8 @@
+# Secrets and personal data stay on the machine running the bot
+.env
+data.json
+data.tmp
+bot.log
+__pycache__/
+*.pyc
+my_schedule.py
