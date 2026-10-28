@@ -6,3 +6,5 @@ bot.log
 __pycache__/
 *.pyc
 my_schedule.py
+archive.json
+archive.tmp

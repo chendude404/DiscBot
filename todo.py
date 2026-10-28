@@ -382,7 +382,7 @@ def board_pages(items: list[dict], now: datetime, pruned: dict,
                 agenda: str | None = None) -> list[list[discord.Embed]]:
     """The board as embeds, packed into as few messages as Discord's size limits allow.
     `agenda` (today's lines from schedule.day_lines) becomes the 📅 section at the top.
-    Applied jobs aren't shown here; they're logged in #application-history."""
+    Applied jobs aren't shown here; they're logged in #application-archive."""
     todos, jobs = open_items(items)
 
     lines, cat = [], object()
@@ -398,6 +398,7 @@ def board_pages(items: list[dict], now: datetime, pruned: dict,
         discord.Embed(title=f"💼 Jobs to apply to ({len(jobs)})", color=discord.Color.gold(),
                       description=_fit([job_line(i, now) for i in jobs], "*No open applications. Post job links in #jobs.*")),
     ]
+    embeds[-1].set_footer(text="Unapplied jobs move to #application-archive after 7 days")
     if agenda is not None:
         embeds.insert(0, discord.Embed(title=f"📅 Today · {now:%a} {now.month}/{now.day}",
                                        color=discord.Color.teal(),
