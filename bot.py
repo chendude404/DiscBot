@@ -217,6 +217,9 @@ sessions: dict[int, dict] = {}
 store = todo.Store()                               # to-dos, jobs, reminders (data.json)
 board_locks: dict[int, asyncio.Lock] = {}
 background_started = False
+catch_up_lock = asyncio.Lock()
+CATCH_UP_FIRST = timedelta(hours=12)               # look-back when a channel has no last-seen mark yet
+LATE = timedelta(minutes=2)                        # older than this = it came due / was sent while offline
 
 
 # ---------------------------------------------------------------- helpers
@@ -476,7 +479,11 @@ async def check_reminders(last_check: datetime, now: datetime):
             continue
         item["fired"] += pending
         changed = True
-        channel = client.get_channel(item.get("channel_id") or 0)
+        # Its time passed while the bot was offline: drop the ping rather than send it late.
+        stale = due is not None and due < now - LATE
+        if stale:
+            print(f"skipped stale ping: {item['text'][:60]!r}")
+        channel = None if stale else client.get_channel(item.get("channel_id") or 0)
         if channel is not None:
             try:
                 sent = await channel.send(ping_text(item, max(map(todo.dt, pending)), now))
@@ -610,6 +617,78 @@ async def on_ready():
                                key=lambda i: i["done_at"] or ""):
                 await log_application(item, guild)
             await refresh_board(guild)
+    # On every connect, including reconnects after a dropped connection: Discord doesn't replay
+    # messages sent while the bot was away, so read them from history.
+    for guild in client.guilds:
+        await catch_up(guild)
+
+
+def mark_seen(message: discord.Message):
+    """Remember the newest message in a watched channel, so catch_up starts after it."""
+    seen = store.data.setdefault("last_seen", {})
+    if message.id > seen.get(str(message.channel.id), 0):
+        seen[str(message.channel.id)] = message.id
+        store.save()
+
+
+def wants_bot(message: discord.Message) -> bool:
+    """Would the bot act on this message? Everything in #todo/#jobs/#randobot; elsewhere only
+    !commands and @mentions."""
+    return (message.channel.name in (TODO_CHANNEL, JOBS_CHANNEL, CHAT_CHANNEL)
+            or bool(BANG_RE.match(message.content.strip())) or client.user in message.mentions)
+
+
+async def catch_up(guild: discord.Guild):
+    """Handle what you posted while the bot was offline, in every channel it can read: messages
+    after the last one it saw, minus any it already replied or reacted to. Missed chats get one
+    combined answer, to-dos/reminders whose time has passed are dropped (see handle_bang), the
+    board is refreshed, and a summary is posted in #randobot."""
+    async with catch_up_lock:
+        until = discord.utils.utcnow()                # anything newer arrives through on_message
+        seen = store.data.setdefault("last_seen", {})
+        caught = {}
+        for channel in guild.text_channels:
+            perms = channel.permissions_for(guild.me)
+            if not (perms.view_channel and perms.read_message_history):
+                continue
+            last = seen.get(str(channel.id))
+            after = discord.Object(last) if last else until - CATCH_UP_FIRST
+            history = [m async for m in channel.history(after=after, before=until, oldest_first=True,
+                                                        limit=MAX_SCAN)]
+            answered = {m.reference.message_id for m in history
+                        if m.author == client.user and m.reference}
+            missed = [m for m in history if m.author.id == owner_id and m.id not in answered
+                      and not any(r.me for r in m.reactions) and wants_bot(m)]
+            batch = []
+            for m in missed:
+                print(f"catch-up #{channel.name} {m.content[:80]!r}")
+                try:
+                    await handle_message(m, chat_batch=batch)
+                except Exception as e:                # one bad message shouldn't stop the rest
+                    print(f"catch-up error: {e!r}")
+            if batch:
+                await answer_missed_chats(batch)
+            if history:
+                mark_seen(history[-1])
+            if missed:
+                caught[channel] = len(missed)
+        if caught:
+            await refresh_board(guild)
+            if chat := discord.utils.get(guild.text_channels, name=CHAT_CHANNEL):
+                await chat.send("🔄 Back online. Caught up on what I missed: "
+                                + ", ".join(f"{c.mention} ({n})" for c, n in caught.items()))
+
+
+async def answer_missed_chats(batch: list[tuple[discord.Message, str, list]]):
+    """Chats sent while the bot was offline: one Claude call answers them together."""
+    if len(batch) == 1:
+        await chat_reply(*batch[0])
+        return
+    lines = [f"[{m.created_at.astimezone(TZ):%a %I:%M %p}] {text or '(sent an image)'}"
+             for m, text, _ in batch]
+    text = ("You were offline and missed these messages (oldest first). Answer them together:\n"
+            + "\n".join(lines))
+    await chat_reply(batch[-1][0], text, [a for _, _, images in batch for a in images])
 
 
 # ---------------------------------------------------------------- chat commands
@@ -931,9 +1010,16 @@ async def handle_jobs_channel(message: discord.Message):
 
 
 async def handle_bang(message: discord.Message, command: str, args: str):
-    """!todo <task> [date] [ping], !remind <message> <time from now>, !schedule …, in any channel."""
-    now = datetime.now(TZ)
+    """!todo <task> [date] [ping], !remind <message> <time from now>, !schedule …, in any channel.
+    Dates are read relative to when the message was sent. If it was sent while the bot was offline
+    and its time has already passed, it's skipped without a reply."""
+    now = message.created_at.astimezone(TZ)
+    late = datetime.now(TZ) - now > LATE
     if command == "schedule":
+        is_edit = re.match(r"(add|remove|delete|del|rm)\b", args.strip(), re.I)
+        if late and now.date() < datetime.now(TZ).date() and not is_edit:   # an old day's view
+            print(f"catch-up: skipped a !schedule view from {now:%m/%d}")
+            return
         await schedule_command(message, args.strip(), now)
         return
     if command == "done":                             # "!done 3" = "done 3", from any channel
@@ -963,6 +1049,9 @@ async def handle_bang(message: discord.Message, command: str, args: str):
             await message.reply(res, mention_author=False)
             return
         text, at = res
+        if late and at <= datetime.now(TZ):
+            print(f"catch-up: skipped !remind, its time passed: {text!r}")
+            return
         add_item("reminder", text, message.guild, message.channel.id, at, [timedelta(0)])
         await message.reply(f"⏰ I'll remind you {todo.stamp(at, 'R')} ({todo.stamp(at, 't')}): {text}",
                             mention_author=False)
@@ -971,6 +1060,9 @@ async def handle_bang(message: discord.Message, command: str, args: str):
     res = todo.parse_todo_command(args, now)
     if isinstance(res, str):
         await message.reply(res, mention_author=False)
+        return
+    if late and res[1] and res[1] <= datetime.now(TZ):
+        print(f"catch-up: skipped !todo, its time passed: {res[0]!r}")
         return
     board = todo_channel(message.guild)
     if board is None:
@@ -1076,6 +1168,14 @@ async def chat_pull(message: discord.Message, when: str | None, last: int | None
 
 @client.event
 async def on_message(message: discord.Message):
+    if message.guild:
+        mark_seen(message)
+    await handle_message(message)
+
+
+async def handle_message(message: discord.Message, chat_batch: list | None = None):
+    """Route one message. With `chat_batch` (catching up after downtime), chat messages are
+    collected there instead of answered, so they can share one reply."""
     if message.author.bot or message.author.id != owner_id:
         return
 
@@ -1121,6 +1221,14 @@ async def on_message(message: discord.Message):
             await chat_pull(message, *pull)
             return
 
+    if chat_batch is not None:
+        chat_batch.append((message, text, images))
+        return
+    await chat_reply(message, text, images)
+
+
+async def chat_reply(message: discord.Message, text: str, images: list[discord.Attachment]):
+    """Answer a chat message with Claude, continuing this channel's conversation."""
     blocks = []
     for att in images[:5]:
         try:
