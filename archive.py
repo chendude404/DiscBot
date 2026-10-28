@@ -4,7 +4,8 @@ postings pulled from the Simplify / Pitt CSC lists (internships, or new-grad rol
 and the CSCareers internship list.
 Ranked by fit.py and filtered by the settings on its ⚙️ Filters screen (US only, role type, season,
 minimum fit, keyword weights). Shown in an always-open message in #application-archive with
-folders, and promoted back to the board with a button.
+folders, and promoted back to the board with a button. The same message has the 📊 Applications
+screen, where this season's applications move through stages (stages.py).
 Plain code, no Claude. Kept in archive.json, apart from data.json, because it holds thousands of
 postings and data.json is rewritten on every message.
 """
@@ -24,6 +25,7 @@ import discord
 import fit
 import jobs
 import places
+import stages
 
 ARCHIVE_FILE = Path(__file__).with_name("archive.json")
 BOARD_DAYS = 7                         # a board job you haven't applied to moves here after this
@@ -50,6 +52,7 @@ MAX_AGE = timedelta(days=90)           # a posting is deleted this long after it
 MAX_STAY = timedelta(days=30)          # …or after this long in the archive, whichever comes first
 UNDO_REJECTS = 10                      # rejections you can take back with ↩️ Undo reject
 PAGE_SIZE = 6                          # 6 postings x 3 buttons keeps a page under Discord's 40 components
+APPS_PAGE_SIZE = 5                     # 5 applications x 4 stage buttons, likewise
 
 
 def title_key(company: str | None, title: str | None) -> str:
@@ -61,6 +64,11 @@ def title_key(company: str | None, title: str | None) -> str:
 def entry_id(url: str) -> str:
     """Short stable id (fits in a button's custom_id) from the link's canonical form."""
     return hashlib.sha1(jobs.canonical(url).encode()).hexdigest()[:12]
+
+
+def app_key(item: dict) -> str:
+    """An application's stable id for its stage buttons (board numbers change every night)."""
+    return entry_id(item["job"].get("url") or item["created"])
 
 
 def role_of(e: dict) -> str:
@@ -353,21 +361,27 @@ class ArchiveView(discord.ui.LayoutView):
     """The always-open message in #application-archive. Screens, by the saved "folder": none =
     the folders as buttons; a folder = its postings best fit first, PAGE_SIZE at a time, each
     with ⬆️ Promote / ✅ Applied / ✖ Reject; "settings" = ⚙️ Filters; "keywords" = 🔑 keyword
-    weights. `take(entry_id, applied)` moves a posting to the board (or straight to your applied
-    records) and returns a short confirmation (None if it's gone). Which
+    weights; "apps" = 📊 Applications, the stage tracker. `take(entry_id, applied)` moves a
+    posting to the board (or straight to your applied records) and returns a short confirmation
+    (None if it's gone). `apps()` lists this season's applications (data.json items, newest
+    first) and `stage(key, stage)` toggles one's stage (key = entry_id of its link). Which
     screen and page it shows is saved in archive.json, so a restart reopens the same place.
     Only `owner_id` can press anything."""
 
     def __init__(self, archive: Archive, take: Callable[[str, bool], Awaitable[str | None]],
-                 owner_id: int | None, note: str = ""):
+                 owner_id: int | None, note: str = "", apps: Callable[[], list[dict]] | None = None,
+                 stage: Callable[[str, str], Awaitable[str | None]] | None = None):
         super().__init__(timeout=None)
         self.archive, self.take, self.owner_id = archive, take, owner_id
+        self.apps, self.stage = apps, stage
         screen = archive.data.get("folder")
         container = discord.ui.Container(accent_colour=discord.Colour.gold())
         if screen == "settings":
             self._settings(container, note)
         elif screen == "keywords":
             self._keywords(container, note)
+        elif screen == "apps" and apps is not None:
+            self._apps(container, apps(), note)
         else:
             rows, now = archive.shown(), datetime.now(timezone.utc)
             names = {key: f"{emoji} {name}" for key, emoji, name in folders(archive.settings)}
@@ -402,8 +416,43 @@ class ArchiveView(discord.ui.LayoutView):
         container.add_item(discord.ui.TextDisplay(
             "-# Unapplied board jobs land here after 7 days; new postings every 3 h (Simplify / Pitt CSC, CSCareers). "
             "Postings are deleted 90 days after posting or 30 days here."))
+        bottom = [_button("Filters", "arcn:settings", self._go("settings"), emoji="⚙️")]
+        if self.apps is not None:
+            bottom.append(_button(f"Applications · {len(self.apps())}", "arcn:apps", self._go("apps"),
+                                  emoji="📊", style=discord.ButtonStyle.primary))
+        container.add_item(discord.ui.ActionRow(*bottom))
+
+    def _apps(self, container, apps, note):
+        now = datetime.now(timezone.utc)
+        pages = max(1, -(-len(apps) // APPS_PAGE_SIZE))
+        page = min(self.archive.data.get("page", 0), pages - 1)
+        container.add_item(discord.ui.TextDisplay(
+            f"## 📊 Applications · this season\n{stages.funnel(apps, now)}\n"
+            f"-# Tap a stage when you hear back; tap it again to take it back. 👻 = nothing for "
+            f"{stages.NO_REPLY_DAYS} days." + (f"\n{note}" if note else "")))
+        container.add_item(discord.ui.Separator())
+        for item in apps[page * APPS_PAGE_SIZE:(page + 1) * APPS_PAGE_SIZE]:
+            j = item["job"]
+            name = (j.get("title") or "Untitled role")[:80].replace("[", "(").replace("]", ")")
+            head = f"[{name}]({j['url']})" if j.get("url") else name
+            container.add_item(discord.ui.TextDisplay(
+                f"**{head}** · **{(j.get('company') or '?')[:40]}** · applied "
+                f"{datetime.fromisoformat(item['done_at']):%m/%d}\n-# {stages.label(item, now)}"))
+            key, at = app_key(item), stages.current(item)
+            container.add_item(discord.ui.ActionRow(*[
+                _button(stage_name, f"arcst:{s}:{key}", self._staged(key, s), emoji=emoji,
+                        style=(discord.ButtonStyle.secondary if s != at else discord.ButtonStyle.danger
+                               if s == "rejected" else discord.ButtonStyle.success))
+                for s, (emoji, stage_name) in stages.STAGES.items()]))
+        if not apps:
+            container.add_item(discord.ui.TextDisplay(
+                "*No applications yet this season. Mark one with ✅ Applied here or `done N` in #todo.*"))
+        container.add_item(discord.ui.Separator())
         container.add_item(discord.ui.ActionRow(
-            _button("Filters", "arcn:settings", self._go("settings"), emoji="⚙️")))
+            _button("Folders", "arcn:home", self._go(None), emoji="⬅️"),
+            _button("◀", "arcn:aprev", self._go("apps", page - 1), disabled=page == 0),
+            _button(f"Page {page + 1}/{pages}", "arcn:apage", self._go("apps", page), disabled=True),
+            _button("▶", "arcn:anext", self._go("apps", page + 1), disabled=page >= pages - 1)))
 
     def _folder(self, container, title, rows, note):
         pages = max(1, -(-len(rows) // PAGE_SIZE))
@@ -495,7 +544,13 @@ class ArchiveView(discord.ui.LayoutView):
         return False
 
     def redraw(self, note: str = "") -> "ArchiveView":
-        return ArchiveView(self.archive, self.take, self.owner_id, note)
+        return ArchiveView(self.archive, self.take, self.owner_id, note, self.apps, self.stage)
+
+    def _staged(self, key: str, stage: str):
+        async def callback(interaction: discord.Interaction):
+            note = await self.stage(key, stage) or "That application isn't in this season's list anymore."
+            await interaction.response.edit_message(view=self.redraw(note))
+        return callback
 
     def _go(self, screen: str | None, page: int = 0):
         async def callback(interaction: discord.Interaction):

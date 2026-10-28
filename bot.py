@@ -81,6 +81,7 @@ import faq
 import jobs
 import schedule
 import sig
+import stages
 import todo
 
 from deck import build_deck_under, normalize_image, parse_plan, planning_prompt
@@ -536,27 +537,58 @@ def archive_channel(guild: discord.Guild) -> discord.TextChannel | None:
     return None
 
 
+def application_record(item: dict, guild: discord.Guild) -> str:
+    """The one-line record of an applied job in #application-archive, ending with its stages
+    (📝 OA 10/30 → 🎤 Interview 11/06) once it has any."""
+    j = item.get("job") or {}
+    bits = [j.get("company"), j.get("location"), j.get("work_mode"), j.get("pay")]
+    if "season_n" not in item:
+        # Its number in the season: applications up to and including this one.
+        earlier = [i for i in guild_items(guild) if (i["done_at"] or "") <= item["done_at"]]
+        item["season_n"] = todo.season_jobs(earlier, todo.dt(item["done_at"]), store.pruned(guild.id))
+    trail = stages.trail(item)
+    return (f"{stages.STAGES[stages.current(item)][0] if stages.current(item) else '✅'} "
+            f"**{j.get('title') or 'Untitled role'}**"
+            + "".join(f" · {b}" for b in bits if b)
+            + f" · applied {todo.stamp(todo.dt(item['done_at']), 'D')}"
+            + (f" · [posting](<{j['url']}>)" if j.get("url") else "")
+            + f" · #{item['season_n']} this season"
+            + (f" · {trail}" if trail else ""))
+
+
 async def log_application(item: dict, guild: discord.Guild):
     """A job was marked applied: post a permanent one-line record in #application-archive."""
     channel = archive_channel(guild)
     if channel is None or item.get("history_msg"):
         return
-    j = item.get("job") or {}
-    bits = [j.get("company"), j.get("location"), j.get("work_mode"), j.get("pay")]
-    # Its number in the season: applications up to and including this one.
-    earlier = [i for i in guild_items(guild) if (i["done_at"] or "") <= item["done_at"]]
-    n = todo.season_jobs(earlier, todo.dt(item["done_at"]), store.pruned(guild.id))
-    text = (f"✅ **{j.get('title') or 'Untitled role'}**"
-            + "".join(f" · {b}" for b in bits if b)
-            + f" · applied {todo.stamp(todo.dt(item['done_at']), 'D')}"
-            + (f" · [posting](<{j['url']}>)" if j.get("url") else "")
-            + f" · #{n} this season")
     try:
-        msg = await channel.send(text)
+        msg = await channel.send(application_record(item, guild))
     except discord.HTTPException:
         return
     item["history_msg"] = [channel.id, msg.id]
     store.save()
+
+
+async def set_application_stage(guild: discord.Guild, key: str, stage: str) -> str | None:
+    """From the 📊 Applications screen: toggle an application's stage (see stages.toggle) and
+    update its record in #application-archive. Returns a short confirmation."""
+    item = next((i for i in stages.applications(guild_items(guild), datetime.now(TZ))
+                 if archive.app_key(i) == key), None)
+    if item is None:
+        return None
+    now_at = stages.toggle(item, stage, datetime.now(TZ))
+    store.save()
+    if ref := item.get("history_msg"):
+        if channel := client.get_channel(ref[0]):
+            try:
+                await channel.get_partial_message(ref[1]).edit(content=application_record(item, guild))
+            except discord.HTTPException:
+                pass                                          # record deleted: the stage still counts
+    title = item["job"].get("title") or "Untitled role"
+    if now_at == stage:
+        emoji, name = stages.STAGES[stage]
+        return f"{emoji} {title} → {name}"
+    return f"↩️ {title}: took back {stages.STAGES[stage][1]}"
 
 
 async def unlog_application(item: dict):
@@ -676,7 +708,13 @@ async def refresh_archive(guild: discord.Guild, note: str = ""):
             return
         def take(eid: str, applied: bool):
             return promote_from_archive(guild, eid, redraw=False, applied=applied)
-        view = archive.ArchiveView(job_archive, take, owner_id, note)
+
+        def apps() -> list[dict]:
+            return stages.applications(guild_items(guild), datetime.now(TZ))
+
+        def stage(key: str, to: str):
+            return set_application_stage(guild, key, to)
+        view = archive.ArchiveView(job_archive, take, owner_id, note, apps, stage)
         ref = job_archive.data.get("message")
         if ref and ref[0] == channel.id:
             try:

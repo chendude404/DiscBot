@@ -8,7 +8,8 @@ Item kinds:
     reminder  a one-off ping ("!remind stretch 30m"); never shown on the board
 Daily tidy-up (tidy()): finished items leave the board after SHOW_DAYS, are deleted after
 KEEP_DAYS (their count is kept in "pruned", so the running totals never drop), and everything
-is renumbered from 1 so the numbers you type stay small.
+is renumbered from 1 so the numbers you type stay small. Jobs applied to this season are kept
+until the season ends, so the 📊 Applications tracker (stages.py) can follow them.
 """
 
 import json
@@ -106,7 +107,8 @@ def tidy(store: Store, now: datetime):
     keep = []
     for item in store.items:
         done_at = dt(item["done_at"]) if item["done"] else None
-        if done_at and now - done_at > timedelta(days=KEEP_DAYS):
+        this_season_app = item["kind"] == "job" and done_at and done_at >= season
+        if done_at and now - done_at > timedelta(days=KEEP_DAYS) and not this_season_app:
             pruned = store.pruned(item.get("guild_id"))
             pruned[item["kind"]] += 1
             if item["kind"] == "job" and done_at >= season:
