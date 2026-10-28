@@ -1,9 +1,10 @@
 """
 How well a job fits you, by keyword rules (plain code, no Claude). Used to rank the job archive.
-Weights: strong boost +3, boost +1, penalty -2. Keywords and weights were picked by you on
-2026-10-28; edit KEYWORDS to change them.
+Weights: strong boost +3, boost +1, penalty -2. These are the defaults you picked on 2026-10-28;
+change weights or add keywords from the archive's ⚙️ Filters screen (saved in archive.json).
 """
 
+import functools
 import re
 
 # (label, weight, pattern, where): `where` is "title" for words that only mean something in the
@@ -29,15 +30,34 @@ KEYWORDS = [
     ("Sales / marketing", -2, r"(?i:\bsales\b|\bmarketing\b|\baccount manager\b|\brecruit(?:ing|er)\b)", "title"),
 ]
 COMPILED = [(label, weight, re.compile(pattern), where) for label, weight, pattern, where in KEYWORDS]
+WEIGHTS = (3, 1, -2, 0)                # what tapping a keyword in the archive cycles through; 0 = off
+MAX_KEYWORDS = 24                      # what fits on the archive's keyword screen
 
 
-def score(job: dict, description: str = "") -> tuple[int, list[str]]:
-    """(fit score, matched labels like "+3 Quant") for a job dict with title/company/location."""
+@functools.lru_cache(maxsize=64)
+def _words_rx(words: tuple[str, ...]) -> re.Pattern:
+    """A keyword you added in the archive: any of its words, case-insensitive, as whole words."""
+    return re.compile(r"(?i)(?<!\w)(?:" + "|".join(map(re.escape, words)) + r")(?!\w)")
+
+
+def keywords(settings: dict | None = None) -> list[tuple[str, int, re.Pattern, str]]:
+    """The keywords in use: the built-in ones with any weights you changed in the archive's
+    settings, then the ones you added there. Weight 0 means turned off."""
+    s = settings or {}
+    weights = s.get("weights", {})
+    out = [(label, weights.get(label, weight), rx, where) for label, weight, rx, where in COMPILED]
+    out += [(c["label"], c["weight"], _words_rx(tuple(c["words"])), "any") for c in s.get("custom", [])]
+    return out
+
+
+def score(job: dict, description: str = "", kws: list | None = None) -> tuple[int, list[str]]:
+    """(fit score, matched labels like "+3 Quant") for a job dict with title/company/location.
+    `kws`: from keywords(settings); the built-in weights if left out."""
     title = job.get("title") or ""
     text = " ".join([title, job.get("company") or "", description])
     total, matched = 0, []
-    for label, weight, rx, where in COMPILED:
-        if rx.search(title if where == "title" else text):
+    for label, weight, rx, where in (kws if kws is not None else COMPILED):
+        if weight and rx.search(title if where == "title" else text):
             total += weight
             matched.append(f"{weight:+d} {label}")
     return total, matched

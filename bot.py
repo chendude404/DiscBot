@@ -642,7 +642,7 @@ async def scrape_jobs():
 
 async def ping_strong_matches(new_ids: set[str]):
     """One message mentioning you, listing the best new postings; it replaces the last one."""
-    strong = [r for r in job_archive.scored() if r[0] in new_ids and r[2] >= PING_SCORE]
+    strong = [r for r in job_archive.shown() if r[0] in new_ids and r[2] >= PING_SCORE]
     for guild in client.guilds:
         channel = archive_channel(guild)
         if not strong or channel is None:
@@ -674,8 +674,9 @@ async def refresh_archive(guild: discord.Guild, note: str = ""):
         if channel is None:
             print(f"no #{ARCHIVE_CHANNEL} channel for the job archive")
             return
-        view = archive.ArchiveView(job_archive, lambda eid: promote_from_archive(guild, eid, redraw=False),
-                                   owner_id, note)
+        def take(eid: str, applied: bool):
+            return promote_from_archive(guild, eid, redraw=False, applied=applied)
+        view = archive.ArchiveView(job_archive, take, owner_id, note)
         ref = job_archive.data.get("message")
         if ref and ref[0] == channel.id:
             try:
@@ -694,9 +695,11 @@ async def refresh_archive(guild: discord.Guild, note: str = ""):
             pass
 
 
-async def promote_from_archive(guild: discord.Guild, eid: str, redraw: bool = True) -> str | None:
-    """Move an archived posting to the board (back as the same item if it came from there).
-    `redraw`: also redraw the archive message (its's own buttons redraw it themselves)."""
+async def promote_from_archive(guild: discord.Guild, eid: str, redraw: bool = True,
+                               applied: bool = False) -> str | None:
+    """Move an archived posting to the board (back as the same item if it came from there), or
+    with `applied`, straight to your applied records in #application-archive without showing it
+    on the board. `redraw`: also redraw the archive message (its own buttons redraw it themselves)."""
     e = job_archive.entries.pop(eid, None)
     if e is None:
         return None
@@ -715,11 +718,15 @@ async def promote_from_archive(guild: discord.Guild, eid: str, redraw: bool = Tr
                              "work_mode": None, "deadline": None, "pay": None, "url": e["url"],
                              "posted": None, "source": e["source"]})
     item["job"]["promoted"] = datetime.now(TZ).isoformat()   # its 7 days start over
+    if applied:
+        set_done(item)
+        await log_application(item, guild)
     store.save()
-    job_archive.handle(e["url"])
+    job_archive.handle(e["url"], e.get("company"), e.get("title"))
     job_archive.save()
     await refresh_board(guild)
-    note = f"⬆️ Moved to the board: {todo.label(item)}"
+    note = (f"✅ Marked applied: {todo.label(item)}" if applied
+            else f"⬆️ Moved to the board: {todo.label(item)}")
     if redraw:
         await refresh_archive(guild, note)
     return note
@@ -1159,7 +1166,7 @@ async def apply_command(guild: discord.Guild, verb: str, numbers: str) -> tuple[
         await delete_pings(items)                     # its reminders are no longer needed
     for item in items:
         if item.get("job") and not undo:                  # removed or applied: don't re-scrape it
-            job_archive.handle(item["job"]["url"])
+            job_archive.handle(item["job"]["url"], item["job"].get("company"), item["job"].get("title"))
             job_archive.save()
         if verb in ("remove", "delete", "del", "rm", "drop"):
             await unlog_application(item)
