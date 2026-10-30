@@ -429,7 +429,8 @@ class ArchiveView(discord.ui.LayoutView):
         container.add_item(discord.ui.TextDisplay(
             f"## 📊 Applications · this season\n{stages.funnel(apps, now)}\n"
             f"-# Tap a stage when you hear back; tap it again to take it back. 👻 = nothing for "
-            f"{stages.NO_REPLY_DAYS} days." + (f"\n{note}" if note else "")))
+            f"{stages.NO_REPLY_DAYS} days; ❌ automatically after {stages.AUTO_REJECT_DAYS}."
+            + (f"\n{note}" if note else "")))
         container.add_item(discord.ui.Separator())
         for item in apps[page * APPS_PAGE_SIZE:(page + 1) * APPS_PAGE_SIZE]:
             j = item["job"]

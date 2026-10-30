@@ -569,6 +569,16 @@ async def log_application(item: dict, guild: discord.Guild):
     store.save()
 
 
+async def update_record(item: dict, guild: discord.Guild):
+    """Show an application's current stage on its record in #application-archive."""
+    if ref := item.get("history_msg"):
+        if channel := client.get_channel(ref[0]):
+            try:
+                await channel.get_partial_message(ref[1]).edit(content=application_record(item, guild))
+            except discord.HTTPException:
+                pass                                          # record deleted: the stage still counts
+
+
 async def set_application_stage(guild: discord.Guild, key: str, stage: str) -> str | None:
     """From the 📊 Applications screen: toggle an application's stage (see stages.toggle) and
     update its record in #application-archive. Returns a short confirmation."""
@@ -578,12 +588,7 @@ async def set_application_stage(guild: discord.Guild, key: str, stage: str) -> s
         return None
     now_at = stages.toggle(item, stage, datetime.now(TZ))
     store.save()
-    if ref := item.get("history_msg"):
-        if channel := client.get_channel(ref[0]):
-            try:
-                await channel.get_partial_message(ref[1]).edit(content=application_record(item, guild))
-            except discord.HTTPException:
-                pass                                          # record deleted: the stage still counts
+    await update_record(item, guild)
     title = item["job"].get("title") or "Untitled role"
     if now_at == stage:
         emoji, name = stages.STAGES[stage]
@@ -619,7 +624,8 @@ def board_jobs() -> list[dict]:
 async def job_housekeeping():
     """Once a day. Board jobs you haven't applied to within archive.BOARD_DAYS move to the
     archive. Then open jobs whose posting was taken down move there too, marked 🔒: a 404/410
-    at once, a weaker sign only if it shows up two days running."""
+    at once, a weaker sign only if it shows up two days running. Applications that have been
+    quiet for stages.AUTO_REJECT_DAYS move to ❌ Rejected."""
     now, moved = datetime.now(TZ), 0
     for item in board_jobs():
         since = datetime.fromisoformat(item["job"].get("promoted") or item["created"])
@@ -648,6 +654,12 @@ async def job_housekeeping():
     job_archive.save()
     print(f"job housekeeping: {moved} moved to the archive, {expired} expired")
     for guild in client.guilds:
+        rejected = stages.auto_reject(stages.applications(guild_items(guild), now), now)
+        if rejected:
+            store.save()
+            print(f"auto-rejected {len(rejected)} quiet applications")
+        for item in rejected:
+            await update_record(item, guild)
         if moved:
             await refresh_board(guild)
         await refresh_archive(guild)

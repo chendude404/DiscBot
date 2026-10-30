@@ -2,7 +2,8 @@
 Where each job application stands: applied → 📝 OA → 🎤 Interview → 🎉 Offer, or ❌ Rejected.
 Plain code, no Claude. The archive's 📊 Applications screen sets stages; the history is kept on
 the applied job's item as item["job"]["stages"] = [[stage, ISO time], ...] (last = current).
-An application that hasn't moved in NO_REPLY_DAYS counts as 👻 no reply (worked out, not stored).
+An application that hasn't moved in NO_REPLY_DAYS counts as 👻 no reply (worked out, not stored);
+after AUTO_REJECT_DAYS it's moved to ❌ Rejected (unless it's an offer).
 """
 
 from datetime import datetime, timedelta
@@ -13,6 +14,7 @@ STAGES ={"oa": ("📝", "OA"), "interview": ("🎤", "Interview"), "offer": ("�
           "rejected": ("❌", "Rejected")}
 ORDER = ["oa", "interview", "offer"]           # how far it got, for the funnel
 NO_REPLY_DAYS = 30
+AUTO_REJECT_DAYS = 120
 
 
 def applications(items: list[dict], now: datetime) -> list[dict]:
@@ -34,8 +36,11 @@ def current(item: dict) -> str | None:
 
 
 def last_change(item: dict) -> datetime:
+    """When it last moved. Taking back a ❌ counts, so it isn't auto-rejected again right away."""
     h = history(item)
-    return datetime.fromisoformat(h[-1][1] if h else item["done_at"])
+    latest = datetime.fromisoformat(h[-1][1] if h else item["done_at"])
+    reopened = item["job"].get("reopened")
+    return max(latest, datetime.fromisoformat(reopened)) if reopened else latest
 
 
 def reached(item: dict, stage: str) -> bool:
@@ -58,9 +63,21 @@ def toggle(item: dict, stage: str, now: datetime) -> str | None:
     h = item["job"].setdefault("stages", [])
     if h and h[-1][0] == stage:
         h.pop()
+        if stage == "rejected":
+            item["job"]["reopened"] = now.isoformat()
     else:
         h.append([stage, now.isoformat()])
     return current(item)
+
+
+def auto_reject(apps: list[dict], now: datetime) -> list[dict]:
+    """Move applications with nothing happening for AUTO_REJECT_DAYS to ❌ Rejected (offers and
+    ones already rejected stay as they are). Returns the ones it moved."""
+    quiet = [a for a in apps if current(a) not in ("offer", "rejected")
+             and now - last_change(a) > timedelta(days=AUTO_REJECT_DAYS)]
+    for a in quiet:
+        a["job"].setdefault("stages", []).append(["rejected", now.isoformat()])
+    return quiet
 
 
 def funnel(apps: list[dict], now: datetime) -> str:
