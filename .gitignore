@@ -8,3 +8,4 @@ __pycache__/
 my_schedule.py
 archive.json
 archive.tmp
+.claude/
