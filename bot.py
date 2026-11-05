@@ -48,6 +48,11 @@ Anywhere (parsed by code, no Claude):
     /todo board              re-post the board at the bottom of #todo
     /todo clear              hide finished items (they still count toward the totals)
     /jobs import [when]      add links already posted in #jobs to the board
+    /jobs archive            point to the job archive in #application-archive and redraw it
+
+Job archive (#application-archive): one always-open message with ranked postings in folders
+(Promote / Applied / Reject), ⚙️ Filters, and the 📊 Applications tracker (OA → interview →
+offer / rejected). See archive.py and stages.py.
 
 Bot permissions needed: Send Messages, Attach Files, Add Reactions, Read Message History,
 Embed Links.
@@ -78,6 +83,7 @@ from dotenv import load_dotenv
 import archive
 import claude_backend
 import faq
+import gradescope
 import jobs
 import schedule
 import sig
@@ -297,7 +303,9 @@ def faq_view(index: int = 0) -> faq.FAQView:
     facts = {"max_images": MAX_COLLECT, "max_scan": MAX_SCAN, "timezone": TZ.key,
              "model": chat_model(), "parse_model": PARSE_MODEL, "chat_channel": CHAT_CHANNEL,
              "todo_channel": TODO_CHANNEL, "jobs_channel": JOBS_CHANNEL,
-             "history_channel": ARCHIVE_CHANNEL}
+             "archive_channel": ARCHIVE_CHANNEL, "ping_score": PING_SCORE,
+             "no_reply_days": stages.NO_REPLY_DAYS, "auto_reject_days": stages.AUTO_REJECT_DAYS,
+             "sig_channels": ", ".join(f"#{c}" for c in sorted(sig.channels()))}
     return faq.FAQView(owner_id, facts, index)
 
 

@@ -3,7 +3,8 @@ Interactive FAQ for the bot's commands: an embed with a topic dropdown and
 Prev/Next buttons. bot.py exposes it as /help and as "@YourBot help".
 
 Topic bodies may use {max_images}, {max_scan}, {timezone}, {model}, {parse_model},
-{chat_channel}, {todo_channel} and {jobs_channel}; bot.py fills them in so the FAQ always
+{chat_channel}, {todo_channel}, {jobs_channel}, {archive_channel}, {ping_score},
+{no_reply_days}, {auto_reject_days} and {sig_channels}; bot.py fills them in so the FAQ always
 matches the running configuration.
 """
 
@@ -17,7 +18,9 @@ TOPICS = [
      "• chat in **#{chat_channel}** (no @mention needed) or anywhere you @mention it\n"
      "• keep a live to-do board in **#{todo_channel}**, with reminders and a running total\n"
      "• add every link you post in **#{jobs_channel}** to the board's job list\n"
-     "• answer one-off questions (`/ask`)\n"
+     "• keep a ranked **job archive** in **#{archive_channel}**, fed by internship lists every "
+     "3 hours, with a 📊 **Applications** tracker (applied → OA → interview → offer)\n"
+     "• answer one-off questions (`/ask`) and show the SIG bot's status (`!sig`)\n"
      "• collect images posted in a channel and turn them into a PowerPoint deck "
      "(`/collect` → `/done`)\n\n"
      "Only the bot's owner can use it; everyone else is ignored.\n"
@@ -42,8 +45,9 @@ TOPICS = [
     ("board", "To-do board", "📋", "How #todo works: add, check off, totals",
      "**#{todo_channel}** holds one live board that the bot keeps at the bottom of the channel: "
      "**📅 Today** (classes and dated to-dos), **To-do**, **Jobs to apply to** and "
-     "**Accomplished** (running totals). Jobs you mark applied move to a permanent log in "
-     "**#{history_channel}**; `undo` takes them back out.\n\n"
+     "**Accomplished** (running totals). Jobs you mark applied are logged in "
+     "**#{archive_channel}** and tracked on its 📊 Applications screen; `undo` takes them back out. "
+     "A job you haven't applied to within 7 days moves to the archive (see *Job archive*).\n\n"
      "**Add (any channel):** `!todo <task> [date] [ping]`\n"
      "`!todo chem test next tue` · `!todo finish resume fri 5pm 1h` · "
      "`!todo dentist 9/30 2pm 1d,30m` · `!todo standup 10am ping`\n"
@@ -80,8 +84,52 @@ TOPICS = [
      "pay and deadline when it can tell (read from the link and Discord's preview). 🔁 means "
      "that link is already on the board.\n\n"
      "Jobs are sorted by deadline. Type `done <number>` in #{todo_channel} once you've applied.\n\n"
+     "Every day at 4 AM the bot checks each board job's link; a posting that has closed moves "
+     "to the archive's 🔒 Closed folder.\n\n"
      "`/jobs import` adds links you posted before this feature existed (optionally only from "
-     "a range, e.g. `when: this month`)."),
+     "a range, e.g. `when: this month`). `/jobs archive` points to the archive and redraws it."),
+
+    ("archive", "Job archive", "🗂️", "Ranked postings in #application-archive",
+     "**#{archive_channel}** holds one always-open message, kept at the bottom of the channel. "
+     "It holds:\n"
+     "• postings from the Simplify / Pitt CSC and CSCareers lists, checked **every 3 hours**\n"
+     "• board jobs you didn't apply to within 7 days, and ones whose link closed\n\n"
+     "**Ranking:** each posting gets a fit score from your keywords (Quant, Trading, SWE, …). "
+     "New postings scoring **{ping_score:+d}** or more ping you.\n\n"
+     "**Folders:** 🗂️ Everything · 🆕 New (last 3 days) · 📈 Quant & trading · 💻 Software · "
+     "🤖 Data & AI · 🔌 Hardware & ECE · ⭐ My keywords · 📌 From my board · 🔒 Closed. "
+     "Tap one to open it, then ◀ ▶ to page.\n\n"
+     "**On each posting:**\n"
+     "• **Promote**: put it on the board in #{todo_channel}\n"
+     "• **Applied**: log it as applied without promoting it\n"
+     "• **Reject**: drop it, and the next best one moves up. ↩️ **Undo reject** brings back "
+     "the last few.\n\n"
+     "**⚙️ Filters:**\n"
+     "• US only / anywhere\n"
+     "• internships or full-time\n"
+     "• season\n"
+     "• minimum fit\n"
+     "• 🔑 **Keywords**: change each weight, or ➕ add your own\n\n"
+     "**Cleanup:** a posting is deleted 90 days after it was posted or 30 days after it "
+     "arrived, whichever comes first. Jobs you already have (same company and title, even under "
+     "another link) are dropped and never offered again."),
+
+    ("apps", "Applications", "📊", "Track OA → interview → offer → rejected",
+     "Open **📊 Applications** from the bottom of the archive message in **#{archive_channel}**. "
+     "It lists everything you've applied to this season (since July 1), newest first, under a "
+     "funnel: applied → 📝 OA → 🎤 Interview → 🎉 Offer.\n\n"
+     "**Stages:** tap 📝 / 🎤 / 🎉 / ❌ on an application to set where it stands, and tap the "
+     "same one again to take it back. Each change is dated, and the record in "
+     "#{archive_channel} shows the trail.\n\n"
+     "**👻 No reply:** shows on an application that hasn't moved in {no_reply_days} days. After "
+     "{auto_reject_days} quiet days it moves to ❌ Rejected automatically (offers never do).\n\n"
+     "**Rejected:** these leave the main list for **❌ Rejected**, which you open from the "
+     "bottom row. They still count in the funnel. Tap ❌ on one there to put it back in play."),
+
+    ("sig", "!sig", "📡", "SIG Predictions Cup bot status",
+     "**Usage:** `!sig`\n\n"
+     "Shows whether the SIG Predictions Cup bot is up, with its latest status. It works in "
+     "**{sig_channels}**."),
 
     ("chat", "@mention chat", "💬", "Talk to Claude with memory; attach images",
      "**Usage:** `@YourBot <message>`\n\n"
