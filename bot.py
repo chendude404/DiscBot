@@ -433,6 +433,20 @@ def known_job_urls() -> set[str]:
     return {jobs.canonical(i["job"]["url"]) for i in store.items if i["kind"] == "job" and i.get("job")}
 
 
+def my_jobs() -> archive.Mine:
+    """Jobs on the board or applied to, to spot the same opportunity under another link."""
+    return archive.Mine([(i["job"].get("company"), i["job"].get("title"))
+                         for i in store.items if i["kind"] == "job" and i.get("job")])
+
+
+def forget_my_jobs() -> int:
+    """Delete archive postings that are a job you already have; returns how many."""
+    if n := job_archive.drop_mine(my_jobs()):
+        job_archive.save()
+        print(f"archive: dropped {n} postings you already have")
+    return n
+
+
 async def refresh_board(guild: discord.Guild, force: bool = False, deleted: int | None = None):
     """Show the board in #todo. Edited in place while it's still the newest message there;
     otherwise re-posted so it stays at the bottom. `deleted`: a message just removed from the
@@ -670,12 +684,12 @@ async def scrape_jobs():
     into the archive, and expired ones are deleted. The only message is a ping when a new
     posting scores PING_SCORE or more."""
     try:
-        res = await archive.scrape_simplify(job_archive, known_job_urls())
+        res = await archive.scrape_simplify(job_archive, known_job_urls(), my_jobs())
         expired = job_archive.expire()
         job_archive.save()
         print(("simplify: unchanged" if res is None else f"simplify: +{len(res[0])} new, "
                f"-{res[1]} no longer listed") + f", {expired} expired")
-        if res or expired:
+        if forget_my_jobs() or res or expired:
             for guild in client.guilds:
                 await refresh_archive(guild)
         if res:
@@ -710,9 +724,30 @@ async def ping_strong_matches(new_ids: set[str]):
 archive_lock = asyncio.Lock()
 
 
+archive_bumps: dict[int, asyncio.Task] = {}
+BUMP_DELAY = 3                                     # seconds: several new records share one move
+
+
+def bump_archive(message: discord.Message):
+    """Something new was posted in #application-archive: move the archive message back below it
+    in a few seconds (one move for a burst of records)."""
+    ref = job_archive.data.get("message")
+    if ref and message.id == ref[1]:
+        return                                        # the archive message itself
+    task = archive_bumps.get(message.guild.id)
+    if task and not task.done():
+        return
+
+    async def later():
+        await asyncio.sleep(BUMP_DELAY)
+        await refresh_archive(message.guild)
+    archive_bumps[message.guild.id] = asyncio.create_task(later())
+
+
 async def refresh_archive(guild: discord.Guild, note: str = ""):
-    """Redraw the always-open archive message in #application-archive (posting and pinning it
-    if it's missing). It keeps showing the folder and page you left it on."""
+    """Redraw the always-open archive message in #application-archive. Edited in place while it's
+    the newest message there; otherwise posted again at the bottom (the old one is deleted), like
+    the #todo board. It keeps showing the folder and page you left it on."""
     async with archive_lock:
         channel = archive_channel(guild)
         if channel is None:
@@ -728,7 +763,8 @@ async def refresh_archive(guild: discord.Guild, note: str = ""):
             return set_application_stage(guild, key, to)
         view = archive.ArchiveView(job_archive, take, owner_id, note, apps, stage)
         ref = job_archive.data.get("message")
-        if ref and ref[0] == channel.id:
+        here = ref and ref[0] == channel.id
+        if here and channel.last_message_id == ref[1]:
             try:
                 await channel.get_partial_message(ref[1]).edit(view=view)
                 client.add_view(view, message_id=ref[1])     # buttons keep working after restarts
@@ -739,10 +775,11 @@ async def refresh_archive(guild: discord.Guild, note: str = ""):
         client.add_view(view, message_id=message.id)
         job_archive.data["message"] = [channel.id, message.id]
         job_archive.save()
-        try:
-            await message.pin()                               # easy to find above the records
-        except discord.HTTPException:
-            pass
+        if here:
+            try:
+                await channel.get_partial_message(ref[1]).delete()
+            except discord.HTTPException:
+                pass
 
 
 async def promote_from_archive(guild: discord.Guild, eid: str, redraw: bool = True,
@@ -847,6 +884,7 @@ async def on_ready():
         if n := job_archive.expire():                 # catch up on the 90/30-day rule
             job_archive.save()
             print(f"archive: {n} expired")
+        forget_my_jobs()
         for guild in client.guilds:
             await refresh_archive(guild)
     # On every connect, including reconnects after a dropped connection: Discord doesn't replay
@@ -1136,7 +1174,7 @@ async def jobs_archive(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     await refresh_archive(interaction.guild)
     channel = archive_channel(interaction.guild)
-    await interaction.followup.send(f"The archive is pinned in {channel.mention}." if channel
+    await interaction.followup.send(f"The archive is at the bottom of {channel.mention}." if channel
                                     else f"There's no #{ARCHIVE_CHANNEL} channel for it.", ephemeral=True)
 
 
@@ -1225,6 +1263,8 @@ async def apply_command(guild: discord.Guild, verb: str, numbers: str) -> tuple[
             set_done(item, not undo)
             if item["kind"] == "job":
                 await (unlog_application(item) if undo else log_application(item, guild))
+    if not undo and any(i.get("job") for i in items) and forget_my_jobs():
+        await refresh_archive(guild)
     return items, sorted(set(ids) - {i["id"] for i in items})
 
 
@@ -1258,6 +1298,8 @@ async def handle_jobs_channel(message: discord.Message):
             await import_job(message, url)
     await message.add_reaction("💼")
     await refresh_board(message.guild)
+    if forget_my_jobs():                                      # the same job from the archive
+        await refresh_archive(message.guild)
 
 
 async def handle_bang(message: discord.Message, command: str, args: str):
@@ -1437,6 +1479,8 @@ async def chat_pull(message: discord.Message, when: str | None, last: int | None
 async def on_message(message: discord.Message):
     if message.guild:
         mark_seen(message)
+        if message.channel == archive_channel(message.guild):
+            bump_archive(message)
     await handle_message(message)
 
 

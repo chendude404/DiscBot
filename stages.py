@@ -13,7 +13,7 @@ import todo
 STAGES ={"oa": ("📝", "OA"), "interview": ("🎤", "Interview"), "offer": ("🎉", "Offer"),
           "rejected": ("❌", "Rejected")}
 ORDER = ["oa", "interview", "offer"]           # how far it got, for the funnel
-NO_REPLY_DAYS = 30
+NO_REPLY_DAYS = 60
 AUTO_REJECT_DAYS = 120
 
 

@@ -61,6 +61,50 @@ def title_key(company: str | None, title: str | None) -> str:
     return f"t:{norm(company)}|{norm(title)}"
 
 
+# Words that don't tell two jobs apart: seasons and years in titles, and corporate filler in
+# company names ("DV Trading" = "DV Trading LLC", "Graviton" = "Graviton Research Capital").
+TITLE_NOISE = {"summer", "fall", "winter", "spring", "2026", "2027", "2028", "the", "and", "of", "for",
+               "a", "in", "program", "programme", "team", "untitled", "role"}
+COMPANY_NOISE = {"the", "inc", "llc", "ltd", "lp", "llp", "plc", "corp", "corporation", "co", "company",
+                 "group", "holdings", "technologies", "technology", "capital", "partners", "research",
+                 "management", "international", "global", "and"}
+SAME_WORD = {"internship": "intern", "interns": "intern", "researcher": "research", "quantitative": "quant",
+             "engineering": "engineer", "developer": "develop", "development": "develop"}
+
+
+def _words(text: str | None, noise: set[str]) -> frozenset[str]:
+    words = (SAME_WORD.get(w, w) for w in re.findall(r"[a-z0-9+#]+", (text or "").lower()))
+    return frozenset(w for w in words if w not in noise)
+
+
+class Mine:
+    """The jobs you already have (on the board or applied to), to recognize the same opportunity
+    under another link or a slightly different title: the company matches (ignoring "LLC",
+    "Group", …) and the titles are the same apart from "Summer 2027", "-" and the like, or one
+    has a single extra word ("Data Science Intern" / "… Data and AI Team"). A different team
+    ("SDE Intern, Annapurna Labs") counts as a different opportunity."""
+
+    def __init__(self, jobs: list[tuple[str | None, str | None]]):
+        self.by_word: dict[str, list[tuple[frozenset, frozenset]]] = {}
+        for company, title in jobs:
+            c, t = _words(company, COMPANY_NOISE), _words(title, TITLE_NOISE)
+            if c and t:
+                for w in c:
+                    self.by_word.setdefault(w, []).append((c, t))
+
+    def has(self, company: str | None, title: str | None) -> bool:
+        c, t = _words(company, COMPANY_NOISE), _words(title, TITLE_NOISE)
+        if not c or not t:
+            return False
+        for w in c:
+            for c2, t2 in self.by_word.get(w, ()):
+                small, big = sorted((t, t2), key=len)
+                if ((c <= c2 or c2 <= c) and small <= big
+                        and (small == big or (len(small) >= 3 and len(big - small) == 1))):
+                    return True
+        return False
+
+
 def entry_id(url: str) -> str:
     """Short stable id (fits in a button's custom_id) from the link's canonical form."""
     return hashlib.sha1(jobs.canonical(url).encode()).hexdigest()[:12]
@@ -123,6 +167,15 @@ class Archive:
         self.data["handled"][entry_id(url)] = when
         if title:
             self.data["handled"][title_key(company, title)] = when
+
+    def drop_mine(self, mine: Mine) -> int:
+        """Delete postings that are a job you already have (see Mine), so the archive and its
+        pings don't offer it again. Returns how many went."""
+        dupes = [eid for eid, e in self.entries.items() if mine.has(e.get("company"), e.get("title"))]
+        for eid in dupes:
+            e = self.entries.pop(eid)
+            self.handle(e["url"], e.get("company"), e.get("title"))
+        return len(dupes)
 
     def reject(self, eid: str) -> str | None:
         """You don't want this posting: delete it, and keep the lists from re-adding it. The last
@@ -246,12 +299,13 @@ def _feed_of(e: dict) -> str | None:
     return e.get("feed") or (e.get("role", "intern") if e["source"] == "Simplify" else None)
 
 
-async def scrape_simplify(archive: Archive, known: set[str]) -> tuple[list[str], int] | None:
+async def scrape_simplify(archive: Archive, known: set[str], mine: Mine | None = None
+                          ) -> tuple[list[str], int] | None:
     """Sync the archive with the lists your role setting asks for (internships: Simplify, then
     CSCareers; full-time: Simplify's New Grad list): add new active postings (internships only
     for your season), refresh ones already here, and drop ones a list no longer has as active.
     A posting another list already gave is skipped (same company + title). `known`: canonical
-    links already on the board. Returns (ids added, number removed), or None if no list changed
+    links already on the board; `mine`: your jobs, so the same job under another link is skipped. Returns (ids added, number removed), or None if no list changed
     since last time (checked by ETag)."""
     s, now = archive.settings, datetime.now(timezone.utc)
     feeds = [f for f, (_, _, role) in FEEDS.items() if s["roles"] in (role, "both")]
@@ -284,7 +338,8 @@ async def scrape_simplify(archive: Archive, known: set[str]) -> tuple[list[str],
                 entries[eid].update(fresh)                    # keeps when it was found
                 continue
             tkey = title_key(fresh["company"], fresh["title"])
-            if eid in handled or tkey in handled or tkey in elsewhere or jobs.canonical(x["url"]) in known:
+            if (eid in handled or tkey in handled or tkey in elsewhere or jobs.canonical(x["url"]) in known
+                    or (mine and mine.has(fresh["company"], fresh["title"]))):
                 continue
             posted = datetime.fromtimestamp(x.get("date_posted") or 0, timezone.utc)
             if now - posted > MAX_AGE:
@@ -380,8 +435,8 @@ class ArchiveView(discord.ui.LayoutView):
             self._settings(container, note)
         elif screen == "keywords":
             self._keywords(container, note)
-        elif screen == "apps" and apps is not None:
-            self._apps(container, apps(), note)
+        elif screen in ("apps", "apps:rejected") and apps is not None:
+            self._apps(container, apps(), note, rejected=screen == "apps:rejected")
         else:
             rows, now = archive.shown(), datetime.now(timezone.utc)
             names = {key: f"{emoji} {name}" for key, emoji, name in folders(archive.settings)}
@@ -422,14 +477,23 @@ class ArchiveView(discord.ui.LayoutView):
                                   emoji="📊", style=discord.ButtonStyle.primary))
         container.add_item(discord.ui.ActionRow(*bottom))
 
-    def _apps(self, container, apps, note):
+    def _apps(self, container, apps, note, rejected: bool = False):
+        """📊 Applications: the funnel over all of this season's applications, then the ones still
+        in play; with `rejected`, the ❌ ones instead (their records stay in the channel too)."""
         now = datetime.now(timezone.utc)
+        funnel = stages.funnel(apps, now)
+        no = [a for a in apps if stages.current(a) == "rejected"]
+        apps = no if rejected else [a for a in apps if stages.current(a) != "rejected"]
+        screen = "apps:rejected" if rejected else "apps"
         pages = max(1, -(-len(apps) // APPS_PAGE_SIZE))
         page = min(self.archive.data.get("page", 0), pages - 1)
         container.add_item(discord.ui.TextDisplay(
-            f"## 📊 Applications · this season\n{stages.funnel(apps, now)}\n"
-            f"-# Tap a stage when you hear back; tap it again to take it back. 👻 = nothing for "
-            f"{stages.NO_REPLY_DAYS} days; ❌ automatically after {stages.AUTO_REJECT_DAYS}."
+            (f"## ❌ Rejected · {len(apps)}\n" if rejected else "## 📊 Applications · this season\n")
+            + f"{funnel}\n"
+            + ("-# Tap ❌ on one to put it back in play." if rejected else
+               f"-# Tap a stage when you hear back; tap it again to take it back. 👻 = nothing for "
+               f"{stages.NO_REPLY_DAYS} days; ❌ automatically after {stages.AUTO_REJECT_DAYS}. "
+               f"Rejected ones move to their own list.")
             + (f"\n{note}" if note else "")))
         container.add_item(discord.ui.Separator())
         for item in apps[page * APPS_PAGE_SIZE:(page + 1) * APPS_PAGE_SIZE]:
@@ -447,13 +511,17 @@ class ArchiveView(discord.ui.LayoutView):
                 for s, (emoji, stage_name) in stages.STAGES.items()]))
         if not apps:
             container.add_item(discord.ui.TextDisplay(
-                "*No applications yet this season. Mark one with ✅ Applied here or `done N` in #todo.*"))
+                "*No rejections this season.*" if rejected else
+                "*No applications in play. Mark one with ✅ Applied here or `done N` in #todo.*"))
         container.add_item(discord.ui.Separator())
         container.add_item(discord.ui.ActionRow(
-            _button("Folders", "arcn:home", self._go(None), emoji="⬅️"),
-            _button("◀", "arcn:aprev", self._go("apps", page - 1), disabled=page == 0),
-            _button(f"Page {page + 1}/{pages}", "arcn:apage", self._go("apps", page), disabled=True),
-            _button("▶", "arcn:anext", self._go("apps", page + 1), disabled=page >= pages - 1)))
+            _button("Applications", "arcn:apps", self._go("apps"), emoji="⬅️") if rejected
+            else _button("Folders", "arcn:home", self._go(None), emoji="⬅️"),
+            _button("◀", "arcn:aprev", self._go(screen, page - 1), disabled=page == 0),
+            _button(f"Page {page + 1}/{pages}", "arcn:apage", self._go(screen, page), disabled=True),
+            _button("▶", "arcn:anext", self._go(screen, page + 1), disabled=page >= pages - 1),
+            *([] if rejected else [_button(f"Rejected · {len(no)}", "arcn:arejected",
+                                           self._go("apps:rejected"), emoji="❌")])))
 
     def _folder(self, container, title, rows, note):
         pages = max(1, -(-len(rows) // PAGE_SIZE))
