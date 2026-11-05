@@ -37,6 +37,10 @@ Channels (matched by name):
                              "done 3" / "remove 3" / "undo 3".
     #jobs                    every link you post is added to the board's job list.
 
+Gradescope (gradescope.py, plain code): every day at 4 AM, assignments due within 5 days are
+added to the #todo board under "Gradescope". Each is added once (remove it and it stays gone)
+and its due date follows extensions. Submitting doesn't check it off: "done 3" does.
+
 Anywhere (parsed by code, no Claude):
     !todo <task> [date] [ping]      e.g. !todo finish resume fri 5pm 1h   (ping: 1h, 30m, 1d,1h,
                                     or "ping" for at the due time)
@@ -61,6 +65,7 @@ Optional .env:
     CLAUDE_MODEL=sonnet                 sonnet | haiku | opus
     OWNER_ID=123...                     who may use the bot (default: whoever owns the bot app)
     CHAT_CHANNEL=randobot  TODO_CHANNEL=todo  JOBS_CHANNEL=jobs   channel names (defaults shown)
+    GRADESCOPE_EMAIL=...  GRADESCOPE_PASSWORD=...   turns on the Gradescope to-dos
 To-dos, jobs and reminders are saved in data.json next to this script.
 """
 
@@ -827,10 +832,55 @@ async def promote_from_archive(guild: discord.Guild, eid: str, redraw: bool = Tr
     return note
 
 
+GRADESCOPE_LEAD_DAYS = 5     # an assignment goes on the board this many days before its due date
+
+
+async def sync_gradescope():
+    """Daily at 4 AM: Gradescope assignments due within GRADESCOPE_LEAD_DAYS (by calendar day)
+    become to-dos, submitted or not; you check them off yourself. "gradescope_seen" remembers
+    every one added, so one you remove doesn't come back. Board items follow due-date changes."""
+    try:
+        found = await gradescope.term_assignments()
+    except Exception as e:
+        print(f"gradescope: {e!r}")
+        return
+    now = datetime.now(TZ)
+    seen = store.data.setdefault("gradescope_seen", {})     # "guild:course:assignment" -> due
+    touched, added = set(), 0
+    for cid, course, a in found:
+        key = f"{cid}:{a.assignment_id or a.name}"
+        due = gradescope.due(a)
+        due = due.astimezone(TZ) if due else None
+        for guild in client.guilds:
+            item = next((i for i in guild_items(guild) if i.get("gradescope") == key), None)
+            if item:
+                if due and not item["done"] and item["due"] != due.isoformat():
+                    item["due"] = due.isoformat()            # extension or moved deadline
+                    touched.add(guild)
+                continue
+            gkey = f"{guild.id}:{key}"
+            board = todo_channel(guild)
+            if (gkey in seen or due is None or board is None or due <= now
+                    or (due.date() - now.date()).days > GRADESCOPE_LEAD_DAYS):
+                continue
+            add_item("todo", f"{gradescope.short_course(course)} · {a.name}"[:200], guild, board.id,
+                     due, category="Gradescope", gradescope=key)
+            seen[gkey] = due.isoformat()
+            touched.add(guild)
+            added += 1
+    for gkey, d in list(seen.items()):                      # forget long-past assignments
+        if datetime.fromisoformat(d) < now - timedelta(days=60):
+            del seen[gkey]
+    store.save()
+    print(f"gradescope: {len(found)} assignments checked, {added} added to the board")
+    for guild in touched:
+        await refresh_board(guild)
+
+
 async def reminder_loop():
     """Every 20 s: send due pings. At midnight: move the agenda to the new day.
     Once a day at 4 AM: tidy and renumber the boards, and archive stale or closed jobs.
-    Every few hours: pull new postings into the archive."""
+    Every few hours: pull new postings into the archive. Daily at 4 AM: Gradescope deadlines."""
     last = datetime.now(TZ)
     while True:
         now = datetime.now(TZ)
@@ -842,6 +892,10 @@ async def reminder_loop():
             if scraped is None or now - datetime.fromisoformat(scraped) > archive.SCRAPE_EVERY:
                 job_archive.data["last_scrape"] = now.isoformat()  # set now so it isn't started twice
                 asyncio.create_task(scrape_jobs())
+            if (gradescope.configured() and now.time() >= todo.TIDY_AT
+                    and store.data.get("last_gradescope") != now.date().isoformat()):
+                store.data["last_gradescope"] = now.date().isoformat()  # once a day
+                asyncio.create_task(sync_gradescope())
             if todo.tidy_due(store, now):
                 await delete_pings(store.items, older_than=timedelta(days=1))
                 todo.tidy(store, now)

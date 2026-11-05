@@ -4,3 +4,4 @@ python-dotenv
 python-pptx
 pillow
 tzdata
+gradescopeapi

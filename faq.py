@@ -78,6 +78,15 @@ TOPICS = [
      "Classes never ping. The semester itself (classes, breaks, end date) lives in "
      "`my_schedule.py`; you'll get a ping in #{todo_channel} when it's time to set up the next one."),
 
+    ("gradescope", "Gradescope", "📝", "Assignments added to the board 5 days before they're due",
+     "Every day at 4 AM the bot checks your current semester's Gradescope courses. Each "
+     "assignment is added to the board under **Gradescope** 5 days before it's due, "
+     "as `ECE 362 · HW10` with its due date.\n\n"
+     "• It's added once: `remove 3` gets rid of it for good.\n"
+     "• If the due date moves (an extension), the board follows.\n"
+     "• Submitting on Gradescope doesn't check it off; `done 3` when you're happy with it.\n\n"
+     "Plain code, no Claude. Needs `GRADESCOPE_EMAIL` and `GRADESCOPE_PASSWORD` in `.env`."),
+
     ("jobs", "Job links", "💼", "How #jobs feeds the board",
      "Every link you post in **#{jobs_channel}** is treated as a job posting. The bot reacts 💼 "
      "and adds it to **Jobs to apply to** in #{todo_channel} with the title, company, location, "
