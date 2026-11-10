@@ -22,12 +22,11 @@ from typing import Awaitable, Callable
 import aiohttp
 import discord
 
-import fit
-import jobs
-import places
-import stages
+from lib import DATA
 
-ARCHIVE_FILE = Path(__file__).with_name("archive.json")
+from . import fit, links, places, stages
+
+ARCHIVE_FILE = DATA / "archive.json"
 BOARD_DAYS = 7                         # a board job you haven't applied to moves here after this
 # Lists in Simplify's listings.json format: feed -> (url, shown as, role it holds). "intern" and
 # "fulltime" are Simplify / Pitt CSC's; "cscareers" (vanshb03) adds internships Simplify misses,
@@ -107,7 +106,7 @@ class Mine:
 
 def entry_id(url: str) -> str:
     """Short stable id (fits in a button's custom_id) from the link's canonical form."""
-    return hashlib.sha1(jobs.canonical(url).encode()).hexdigest()[:12]
+    return hashlib.sha1(links.canonical(url).encode()).hexdigest()[:12]
 
 
 def app_key(item: dict) -> str:
@@ -338,7 +337,7 @@ async def scrape_simplify(archive: Archive, known: set[str], mine: Mine | None =
                 entries[eid].update(fresh)                    # keeps when it was found
                 continue
             tkey = title_key(fresh["company"], fresh["title"])
-            if (eid in handled or tkey in handled or tkey in elsewhere or jobs.canonical(x["url"]) in known
+            if (eid in handled or tkey in handled or tkey in elsewhere or links.canonical(x["url"]) in known
                     or (mine and mine.has(fresh["company"], fresh["title"]))):
                 continue
             posted = datetime.fromtimestamp(x.get("date_posted") or 0, timezone.utc)

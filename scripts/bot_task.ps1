@@ -2,7 +2,7 @@
 Runs the bot 24/7 as a Windows scheduled task: starts at boot (no login needed),
 runs hidden in the background, and restarts itself if it crashes.
 
-Run from an ADMIN PowerShell in this folder:
+Run from an ADMIN PowerShell in this folder (scripts/):
     .\bot_task.ps1 install     # register and start it
     .\bot_task.ps1 status      # is it running? + last lines of bot.log
     .\bot_task.ps1 restart     # e.g. after editing bot.py
@@ -17,7 +17,7 @@ param([ValidateSet("install", "uninstall", "start", "stop", "restart", "status")
 $TaskName = "DiscordClaudeBot"
 $Here = $PSScriptRoot
 $Runner = Join-Path $Here "run_bot.cmd"
-$Log = Join-Path $Here "bot.log"
+$Log = Join-Path (Split-Path $Here) "data\bot.log"
 
 function Stop-Bot {
     Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
@@ -30,7 +30,7 @@ function Stop-Bot {
 
 switch ($Action) {
     "install" {
-        $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$Runner`"" -WorkingDirectory $Here
+        $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$Runner`"" -WorkingDirectory (Split-Path $Here)
         $trigger = New-ScheduledTaskTrigger -AtStartup
         # S4U = run as you, whether or not you're logged in, with no window and no stored password.
         $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType S4U -RunLevel Limited

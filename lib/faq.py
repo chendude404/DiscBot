@@ -1,10 +1,10 @@
 """
 Interactive FAQ for the bot's commands: an embed with a topic dropdown and
-Prev/Next buttons. bot.py exposes it as /help and as "@YourBot help".
+Prev/Next buttons. discbot/chat.py exposes it as /help and as "@YourBot help".
 
 Topic bodies may use {max_images}, {max_scan}, {timezone}, {model}, {parse_model},
 {chat_channel}, {todo_channel}, {jobs_channel}, {archive_channel}, {announce_channel}, {lms}, {ping_score},
-{no_reply_days}, {auto_reject_days} and {sig_channels}; bot.py fills them in so the FAQ always
+{no_reply_days} and {auto_reject_days}; discbot/chat.py fills them in so the FAQ always
 matches the running configuration.
 """
 
@@ -21,7 +21,7 @@ TOPICS = [
      "• keep a ranked **job archive** in **#{archive_channel}**, fed by internship lists every "
      "3 hours, with a 📊 **Applications** tracker (applied → OA → interview → offer)\n"
      "• post your course announcements (Brightspace or Canvas) in **#{announce_channel}**\n"
-     "• answer one-off questions (`/ask`) and show the SIG bot's status (`!sig`)\n"
+     "• answer one-off questions (`/ask`)\n"
      "• collect images posted in a channel and turn them into a PowerPoint deck "
      "(`/collect` → `/done`)\n\n"
      "Only the bot's owner can use it; everyone else is ignored.\n"
@@ -77,7 +77,7 @@ TOPICS = [
      "`!schedule add Chem lab TR 2-4:50pm` (days: `mon,wed`, `MWF`, `TR`, `TTh`, `sat`).\n"
      "`!schedule remove S2` deletes one.\n\n"
      "Classes never ping. The semester itself (classes, breaks, end date) lives in "
-     "`my_schedule.py`; you'll get a ping in #{todo_channel} when it's time to set up the next one."),
+     "`data/my_schedule.py`; you'll get a ping in #{todo_channel} when it's time to set up the next one."),
 
     ("gradescope", "Gradescope", "📝", "Assignments added to the board 5 days before they're due",
      "Every day at 4 AM the bot checks your current semester's Gradescope courses. Each "
@@ -149,11 +149,6 @@ TOPICS = [
      "{auto_reject_days} quiet days it moves to ❌ Rejected automatically (offers never do).\n\n"
      "**Rejected:** these leave the main list for **❌ Rejected**, which you open from the "
      "bottom row. They still count in the funnel. Tap ❌ on one there to put it back in play."),
-
-    ("sig", "!sig", "📡", "SIG Predictions Cup bot status",
-     "**Usage:** `!sig`\n\n"
-     "Shows whether the SIG Predictions Cup bot is up, with its latest status. It works in "
-     "**{sig_channels}**."),
 
     ("chat", "@mention chat", "💬", "Talk to Claude with memory; attach images",
      "**Usage:** `@YourBot <message>`\n\n"

@@ -1,11 +1,9 @@
-# Secrets and personal data stay on the machine running the bot
+# Secrets stay on the machine running the bot
 .env
-data.json
-data.tmp
-bot.log
+# Personal data, generated files and the log (data/data.json, archive.json, bot.log,
+# my_schedule.py); only the example schedule is committed
+data/*
+!data/my_schedule_example.py
 __pycache__/
 *.pyc
-my_schedule.py
-archive.json
-archive.tmp
 .claude/

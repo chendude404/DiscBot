@@ -1,4 +1,4 @@
-"""Example semester for schedule.py. Copy this file to my_schedule.py (which is gitignored) and fill in your own classes."""
+"""Example semester for schedule.py. Copy this file to my_schedule.py in this folder (data/ is gitignored) and fill in your own classes."""
 
 from datetime import date, datetime
 

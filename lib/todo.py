@@ -1,6 +1,6 @@
 """
 To-dos, job applications and reminders: storage (data.json), parsing of the !todo and
-!remind commands (plain code, no Claude), and the board shown in #todo. bot.py wires these into Discord.
+!remind commands (plain code, no Claude), and the board shown in #todo. discbot/board.py wires these into Discord.
 
 Item kinds:
     todo      a task on the board; optional due time and pings the user asked for
@@ -18,9 +18,11 @@ import re
 from datetime import datetime, time, timedelta
 from pathlib import Path
 
+from lib import DATA
+
 import discord
 
-DATA_FILE = Path(__file__).with_name("data.json")
+DATA_FILE = DATA / "data.json"
 TIDY_AT = time(4, 0)          # daily renumbering, when you're unlikely to be mid-"done 3"
 SHOW_DAYS = 7                 # finished items stay visible (Applied / Recent) this long
 KEEP_DAYS = 35                # then are deleted from data.json; > a month so "This month" is right

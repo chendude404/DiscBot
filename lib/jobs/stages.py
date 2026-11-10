@@ -8,7 +8,7 @@ after AUTO_REJECT_DAYS it's moved to ❌ Rejected (unless it's an offer).
 
 from datetime import datetime, timedelta
 
-import todo
+from lib import todo
 
 STAGES ={"oa": ("📝", "OA"), "interview": ("🎤", "Interview"), "offer": ("🎉", "Offer"),
           "rejected": ("❌", "Rejected")}

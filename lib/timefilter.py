@@ -1,6 +1,6 @@
 """
 Turn phrases like "today", "last 3 days", "since monday", "on 9/20" into a
-(start, end) datetime range. Deterministic for common phrases; bot.py falls
+(start, end) datetime range. Deterministic for common phrases; discbot/decks.py falls
 back to Claude for anything this can't parse.
 """
 

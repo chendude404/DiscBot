@@ -1,25 +1,37 @@
 """
 Weekly class schedule and the board's 📅 agenda. Plain code, no Claude.
 
-The semester lives in my_schedule.py (gitignored, so your timetable stays off GitHub; without it
-the bot uses my_schedule_example.py). On startup, if SEMESTER or CLASSES changed since last time,
+The semester lives in data/my_schedule.py (gitignored, so your timetable stays off GitHub; without
+it the bot uses data/my_schedule_example.py). On startup, if SEMESTER or CLASSES changed since last time,
 CLASSES are loaded into data.json (replacing what was there), so `!schedule add` /
 `!schedule remove` then work on everything alike. Classes repeat weekly until SEMESTER_END and
 skip HOLIDAYS. For a new semester: edit SEMESTER, CLASSES, HOLIDAYS, SEMESTER_END,
-NEXT_SEMESTER_REMINDER in my_schedule.py and restart.
+NEXT_SEMESTER_REMINDER in data/my_schedule.py and restart.
 """
 
 import re
 from datetime import date, datetime, time, timedelta
 
-import todo
+import importlib.util
 
-# ---------------------------------------------------------------- the semester (my_schedule.py)
+from . import DATA, todo
 
-try:
-    from my_schedule import CLASSES, HOLIDAYS, NEXT_SEMESTER_REMINDER, SEMESTER, SEMESTER_END
-except ImportError:
-    from my_schedule_example import CLASSES, HOLIDAYS, NEXT_SEMESTER_REMINDER, SEMESTER, SEMESTER_END
+# ---------------------------------------------------------------- the semester (data/my_schedule.py)
+
+def _semester_file():
+    """data/my_schedule.py, or data/my_schedule_example.py when you haven't made one."""
+    path = DATA / "my_schedule.py"
+    if not path.exists():
+        path = DATA / "my_schedule_example.py"
+    spec = importlib.util.spec_from_file_location("my_schedule", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_sem = _semester_file()
+CLASSES, HOLIDAYS, SEMESTER, SEMESTER_END = _sem.CLASSES, _sem.HOLIDAYS, _sem.SEMESTER, _sem.SEMESTER_END
+NEXT_SEMESTER_REMINDER = _sem.NEXT_SEMESTER_REMINDER
 
 
 # ---------------------------------------------------------------- parsing

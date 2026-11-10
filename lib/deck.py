@@ -1,6 +1,6 @@
 """
 Deck-building helpers: image normalization, Claude plan parsing, and .pptx rendering.
-Kept separate from bot.py so it can be tested without Discord.
+Kept apart from discbot/decks.py so it can be tested without Discord.
 """
 
 import io

@@ -8,7 +8,7 @@ The library is synchronous (requests), so the async helpers run it in a worker t
 the bot's event loop free. One logged-in session is kept and reused; if a call fails (e.g. the
 session expired), it logs in again once and retries.
 
-Run `py gradescope.py` to check the credentials: it prints your courses and upcoming deadlines.
+Run `py -m lib.gradescope` to check the credentials: it prints your courses and upcoming deadlines.
 """
 
 import asyncio
