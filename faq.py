@@ -3,7 +3,7 @@ Interactive FAQ for the bot's commands: an embed with a topic dropdown and
 Prev/Next buttons. bot.py exposes it as /help and as "@YourBot help".
 
 Topic bodies may use {max_images}, {max_scan}, {timezone}, {model}, {parse_model},
-{chat_channel}, {todo_channel}, {jobs_channel}, {archive_channel}, {ping_score},
+{chat_channel}, {todo_channel}, {jobs_channel}, {archive_channel}, {announce_channel}, {lms}, {ping_score},
 {no_reply_days}, {auto_reject_days} and {sig_channels}; bot.py fills them in so the FAQ always
 matches the running configuration.
 """
@@ -20,6 +20,7 @@ TOPICS = [
      "• add every link you post in **#{jobs_channel}** to the board's job list\n"
      "• keep a ranked **job archive** in **#{archive_channel}**, fed by internship lists every "
      "3 hours, with a 📊 **Applications** tracker (applied → OA → interview → offer)\n"
+     "• post your course announcements (Brightspace or Canvas) in **#{announce_channel}**\n"
      "• answer one-off questions (`/ask`) and show the SIG bot's status (`!sig`)\n"
      "• collect images posted in a channel and turn them into a PowerPoint deck "
      "(`/collect` → `/done`)\n\n"
@@ -86,6 +87,20 @@ TOPICS = [
      "• If the due date moves (an extension), the board follows.\n"
      "• Submitting on Gradescope doesn't check it off; `done 3` when you're happy with it.\n\n"
      "Plain code, no Claude. Needs `GRADESCOPE_EMAIL` and `GRADESCOPE_PASSWORD` in `.env`."),
+
+    ("announcements", "Announcements", "📣", "Course announcements posted in #{announce_channel}",
+     "Every 30 minutes the bot checks your school's learning platform ({lms}) for new "
+     "announcements and posts each one in **#{announce_channel}** as a card: the course "
+     "(`IE 335`), the title linking to the announcement, the full text with working links, "
+     "and any attachment names.\n\n"
+     "• Only courses you're a **student** in. Courses you teach, TA or grade are never read.\n"
+     "• If a professor edits an announcement, the card is edited too (footer: *edited*).\n"
+     "• The very first check also posts the last 3 days, so you can see it working.\n"
+     "• After 3 failed checks in a row it pings you once here, usually because the sign-in "
+     "or access token expired, and says how to fix it.\n\n"
+     "Set `LMS=brightspace` or `LMS=canvas` in `.env` (what each needs is at the top of "
+     "`lms/brightspace.py` / `lms/canvas.py`), then run `py -m lms` to check it. "
+     "Plain code, no Claude. No #{announce_channel} channel, no checks."),
 
     ("jobs", "Job links", "💼", "How #jobs feeds the board",
      "Every link you post in **#{jobs_channel}** is treated as a job posting. The bot reacts 💼 "

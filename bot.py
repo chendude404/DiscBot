@@ -41,6 +41,11 @@ Gradescope (gradescope.py, plain code): every day at 4 AM, assignments due withi
 added to the #todo board under "Gradescope". Each is added once (remove it and it stays gone)
 and its due date follows extensions. Submitting doesn't check it off: "done 3" does.
 
+Announcements (lms/, plain code): every 30 minutes, new announcements from courses you're a
+student in on your school's learning platform (LMS=brightspace or canvas in .env) are posted
+to #announcements. One edited on the platform is edited in Discord too. Without LMS set and
+an #announcements channel it never runs; `py -m lms` checks the setup.
+
 Anywhere (parsed by code, no Claude):
     !todo <task> [date] [ping]      e.g. !todo finish resume fri 5pm 1h   (ping: 1h, 30m, 1d,1h,
                                     or "ping" for at the due time)
@@ -65,6 +70,8 @@ Optional .env:
     CLAUDE_MODEL=sonnet                 sonnet | haiku | opus
     OWNER_ID=123...                     who may use the bot (default: whoever owns the bot app)
     CHAT_CHANNEL=randobot  TODO_CHANNEL=todo  JOBS_CHANNEL=jobs   channel names (defaults shown)
+    ANNOUNCEMENTS_CHANNEL=announcements
+    LMS=brightspace | canvas            turns on the announcement feed (see lms/__init__.py)
     GRADESCOPE_EMAIL=...  GRADESCOPE_PASSWORD=...   turns on the Gradescope to-dos
 To-dos, jobs and reminders are saved in data.json next to this script.
 """
@@ -90,6 +97,7 @@ import claude_backend
 import faq
 import gradescope
 import jobs
+import lms
 import schedule
 import sig
 import stages
@@ -148,6 +156,7 @@ TODO_CHANNEL = os.getenv("TODO_CHANNEL", "todo")
 JOBS_CHANNEL = os.getenv("JOBS_CHANNEL", "jobs")
 # Holds both the always-open job archive and the one-line records of jobs you applied to.
 ARCHIVE_CHANNEL = os.getenv("ARCHIVE_CHANNEL", "application-archive")
+ANNOUNCE_CHANNEL = os.getenv("ANNOUNCEMENTS_CHANNEL", "announcements")
 OLD_ARCHIVE_NAMES = ("application-history",)       # its name before the rename, still accepted
 PING_SCORE = 6                                     # new scraped postings this good get you pinged
 
@@ -309,6 +318,7 @@ def faq_view(index: int = 0) -> faq.FAQView:
              "model": chat_model(), "parse_model": PARSE_MODEL, "chat_channel": CHAT_CHANNEL,
              "todo_channel": TODO_CHANNEL, "jobs_channel": JOBS_CHANNEL,
              "archive_channel": ARCHIVE_CHANNEL, "ping_score": PING_SCORE,
+             "announce_channel": ANNOUNCE_CHANNEL, "lms": lms.name(),
              "no_reply_days": stages.NO_REPLY_DAYS, "auto_reject_days": stages.AUTO_REJECT_DAYS,
              "sig_channels": ", ".join(f"#{c}" for c in sorted(sig.channels()))}
     return faq.FAQView(owner_id, facts, index)
@@ -877,10 +887,80 @@ async def sync_gradescope():
         await refresh_board(guild)
 
 
+ANNOUNCE_EVERY = timedelta(minutes=30)
+ANNOUNCE_BACKFILL = timedelta(days=3)      # the first poll also posts this much history
+ANNOUNCE_WARN_AFTER = 3                    # failed polls in a row before saying so in the channel
+ANNOUNCE_COLOR = 0xE0A526
+
+
+def announcement_channels() -> list[discord.TextChannel]:
+    return [c for g in client.guilds if (c := discord.utils.get(g.text_channels, name=ANNOUNCE_CHANNEL))]
+
+
+def announcement_embed(a: lms.Announcement) -> discord.Embed:
+    e = discord.Embed(title=a.title[:256], url=a.url or None, color=ANNOUNCE_COLOR, timestamp=a.posted,
+                      description=a.body[:4000] + ("…" if len(a.body) > 4000 else ""))
+    e.set_author(name=a.course.short)
+    if a.attachments:
+        e.add_field(name="📎 Attachments", value="\n".join(a.attachments)[:1024], inline=False)
+    e.set_footer(text=lms.name() + (" · edited" if a.edited - a.posted > timedelta(minutes=10) else ""))
+    return e
+
+
+async def sync_announcements():
+    """Every 30 min: post new announcements from your student courses (lms/, LMS in .env) in
+    #announcements, oldest first. One edited on the platform is edited in Discord too. State
+    lives in data.json under "announcements": when the last poll worked, which message is which."""
+    channels = announcement_channels()
+    state = store.data.setdefault("announcements", {"last_ok": None, "posted": {}, "fails": 0})
+    now = datetime.now(TZ)
+    since = (datetime.fromisoformat(state["last_ok"]) - timedelta(hours=1) if state["last_ok"]
+             else now - ANNOUNCE_BACKFILL)
+    try:
+        async with lms.connect() as src:
+            found = await src.announcements(since)
+        new = edited = 0
+        for a in found:
+            seen, stamp = state["posted"].get(a.id), a.edited.isoformat()
+            if seen and seen["mod"] == stamp:
+                continue
+            embed = announcement_embed(a)
+            if seen:                                       # edited on the platform
+                for ch_id, msg_id in seen["msgs"]:
+                    if ch := client.get_channel(ch_id):
+                        try:
+                            await ch.get_partial_message(msg_id).edit(embed=embed)
+                        except discord.HTTPException:
+                            pass                           # deleted in Discord: leave it
+                seen["mod"] = stamp
+                edited += 1
+            else:
+                msgs = [[ch.id, (await ch.send(embed=embed)).id] for ch in channels]
+                state["posted"][a.id] = {"mod": stamp, "msgs": msgs, "at": now.isoformat()}
+                new += 1
+    except Exception as e:
+        state["fails"] += 1
+        store.save()
+        print(f"announcements: {e!r}")
+        if state["fails"] == ANNOUNCE_WARN_AFTER:          # once per outage, not every poll
+            for ch in channels:
+                await ch.send(f"<@{owner_id}> ⚠️ The {lms.name()} feed has failed {state['fails']} times "
+                              f"in a row and is paused until it works again. {lms.fix_hint()}\n"
+                              f"-# {str(e)[:300]}")
+        return
+    state.update(last_ok=now.isoformat(), fails=0)
+    for key, p in list(state["posted"].items()):          # forget announcements from long ago
+        if datetime.fromisoformat(p["at"]) < now - timedelta(days=120):
+            del state["posted"][key]
+    store.save()
+    print(f"announcements: {len(found)} checked, {new} posted, {edited} edited")
+
+
 async def reminder_loop():
     """Every 20 s: send due pings. At midnight: move the agenda to the new day.
     Once a day at 4 AM: tidy and renumber the boards, and archive stale or closed jobs.
-    Every few hours: pull new postings into the archive. Daily at 4 AM: Gradescope deadlines."""
+    Every few hours: pull new postings into the archive. Daily at 4 AM: Gradescope deadlines.
+    Every 30 min, with LMS set and an #announcements channel: new course announcements."""
     last = datetime.now(TZ)
     while True:
         now = datetime.now(TZ)
@@ -896,6 +976,11 @@ async def reminder_loop():
                     and store.data.get("last_gradescope") != now.date().isoformat()):
                 store.data["last_gradescope"] = now.date().isoformat()  # once a day
                 asyncio.create_task(sync_gradescope())
+            polled = store.data.get("last_announcements")
+            if (lms.configured() and announcement_channels()
+                    and (polled is None or now - datetime.fromisoformat(polled) >= ANNOUNCE_EVERY)):
+                store.data["last_announcements"] = now.isoformat()  # set now so it isn't started twice
+                asyncio.create_task(sync_announcements())
             if todo.tidy_due(store, now):
                 await delete_pings(store.items, older_than=timedelta(days=1))
                 todo.tidy(store, now)

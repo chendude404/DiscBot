@@ -5,3 +5,4 @@ python-pptx
 pillow
 tzdata
 gradescopeapi
+mcp
