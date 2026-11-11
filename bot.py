@@ -38,7 +38,10 @@ Channels (matched by name):
                              Tests, deadlines and events you mention are added to the board.
                              "use opus" / "use haiku" / "use sonnet" switches the chat model;
                              "model" shows the current one.
-    #todo                    holds the live board. Plain text becomes an undated to-do;
+                             With LMS=brightspace, it (and @mention chat) can look up your
+                             courses, due dates, grades, announcements and course content
+                             ("what's due this week?"); read-only.
+    #todo                   holds the live board. Plain text becomes an undated to-do;
                              "done 3" / "remove 3" / "undo 3".
     #jobs                    every link you post is added to the board's job list.
 

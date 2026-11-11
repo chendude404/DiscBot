@@ -10,6 +10,10 @@ can replace the command that starts the server.
 
 Each poll starts the server, makes about a dozen tool calls and closes it, so nothing stays
 running between polls.
+
+Chat (discbot/chat.py) also hands the same server to Claude through chat_tools(), limited to
+CHAT_TOOLS: read-only tools for your own courses. Roster and class emails, the instructor/TA
+dropbox tools, downloads and sign-in/sign-out are left out.
 """
 
 import json
@@ -36,12 +40,45 @@ def configured() -> bool:
     return True            # the server's own setup holds everything; a failed poll says so
 
 
+# What Claude may call in chat: your own courses, assignments, grades and course material.
+CHAT_TOOLS = (
+    "get_my_courses", "get_upcoming_due_dates", "get_assignments", "get_calendar_events",
+    "get_announcements", "get_announcement_files", "get_assignment_files",
+    "get_assignment_rubric", "get_my_grades", "get_course_content", "get_syllabus",
+    "get_video_transcript", "search_course", "get_discussions", "get_my_groups",
+    "get_available_groups",
+)
+# The rest of this version's tools, hidden from Claude so it doesn't try them and get denied.
+HIDDEN_TOOLS = (
+    "get_roster", "get_classlist_emails", "get_dropbox_folders", "get_dropbox_submissions",
+    "get_dropbox_user_submissions", "get_dropbox_feedback", "get_rubrics_for_object",
+    "get_server_info", "download_file", "download_course_files",
+    "download_dropbox_submission_file", "sign_in", "sign_out",
+)
+
+
+def _command() -> list[str]:
+    return shlex.split(os.getenv("BRIGHTSPACE_MCP") or DEFAULT_COMMAND, posix=os.name != "nt")
+
+
 def _server() -> StdioServerParameters:
-    cmd, *args = shlex.split(os.getenv("BRIGHTSPACE_MCP") or DEFAULT_COMMAND, posix=os.name != "nt")
+    cmd, *args = _command()
     # The server finds its config and saved session through the user's environment
     # (home folder, LOCALAPPDATA), so it gets the whole thing, not MCP's trimmed default.
     env = {**os.environ, "D2L_NO_UPDATE_CHECK": "1"}
     return StdioServerParameters(command=cmd, args=args, env=env)
+
+
+def chat_tools() -> dict:
+    """claude_backend.ask kwargs: this server, with only CHAT_TOOLS callable."""
+    cmd, *args = _command()
+    if os.name == "nt" and cmd.lower() in ("npx", "npm"):
+        cmd, args = "cmd", ["/c", cmd, *args]      # Claude Code can't start npx.cmd directly
+    server = {"type": "stdio", "command": cmd, "args": args,
+              "env": {"D2L_NO_UPDATE_CHECK": "1"}}  # added to Claude Code's own environment
+    return {"mcp_servers": {"brightspace": server},
+            "allowed_tools": [f"mcp__brightspace__{t}" for t in CHAT_TOOLS],
+            "disallowed_tools": [f"mcp__brightspace__{t}" for t in HIDDEN_TOOLS]}
 
 
 def _parse(stamp: str) -> datetime:

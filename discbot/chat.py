@@ -1,13 +1,14 @@
 """
 Chat with Claude: #randobot and @mentions (with per-channel memory), /ask, /reset, /help,
-and switching the chat model. Things Claude tags as to-dos go on the board.
+and switching the chat model. Things Claude tags as to-dos go on the board. With
+LMS=brightspace, chat can also look up your courses, due dates and grades (read-only).
 """
 
 import ast
 import asyncio
 import platform
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import discord
 from discord import app_commands
@@ -59,6 +60,66 @@ CHAT_PROMPT = SYSTEM_PROMPT + (
     "Don't mention these lines or the board unless they ask."
 )
 TODO_TAG_RE = re.compile(r"\[\[todo:\s*(.+?)\]\]", re.I | re.S)
+
+
+def lms_tools() -> dict:
+    """claude_backend.ask kwargs giving chat read-only access to the LMS (Brightspace only),
+    or {} when LMS isn't set to a platform that offers chat tools."""
+    try:
+        p = lms.platform()
+    except lms.LMSError:
+        return {}
+    if p is None or not hasattr(p, "chat_tools"):
+        return {}
+    return {**p.chat_tools(), "rewrite_tool_output": localize_times}
+
+
+# "2026-11-13T04:59:00.000Z" -> "Thu 2026-11-12 11:59 PM EST": Brightspace reports UTC, and
+# models often slip a day converting it or naming the weekday, so code does it for them.
+UTC_STAMP_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)Z\b")
+
+
+def _local_stamp(m: re.Match) -> str:
+    t = datetime.fromisoformat(m.group(1) + "+00:00").astimezone(TZ)
+    return f"{t:%a %Y-%m-%d %I:%M %p} {t.tzname()}"
+
+
+def localize_times(value):
+    """Every UTC timestamp in a tool result (any nesting of str/list/dict) in local time."""
+    if isinstance(value, str):
+        return UTC_STAMP_RE.sub(_local_stamp, value)
+    if isinstance(value, list):
+        return [localize_times(v) for v in value]
+    if isinstance(value, dict):
+        return {k: localize_times(v) for k, v in value.items()}
+    return value
+
+
+LMS_TOOLS = lms_tools()
+# The weakest model that answers LMS lookups (Haiku got due dates wrong in testing). With a
+# weaker chat model, a message that turns out to need a lookup is answered by this one instead.
+LMS_MODEL = "sonnet"
+LMS_NOTE = (
+    f" Exception to having no tools: in this chat you can look things up in the user's "
+    f"{lms.name()} (their school's learning platform) with the mcp__{lms.name().lower()}__ "
+    "tools, which are read-only: courses, assignments and due dates, calendar, announcements, "
+    "grades, course content, syllabus and discussions. Use them when the user asks about their "
+    "classes, and answer from what they return; don't use them otherwise. You can't submit, "
+    "download or change anything there. If a tool says the sign-in expired, tell the user: "
+    + lms.fix_hint() + " Dates and times in these tools' results are already in the user's "
+    "time zone and include the weekday: show them as given, without converting. "
+    "What you look up with these tools "
+    "is not something the user told you about: never add [[todo: ...]] lines for it unless "
+    "they ask you to put it on their to-do board."
+) if LMS_TOOLS else ""
+
+
+def lms_now() -> str:
+    """Today and the next week with weekdays, appended per message: "what's due this week?"
+    needs to know what today is, and models often get the weekday of a date wrong."""
+    now = datetime.now(TZ)
+    days = ", ".join(f"{now + timedelta(days=i):%a %m/%d}" for i in range(8))
+    return f" It is now {now:%A %B %d, %Y %I:%M %p} ({TZ.key}). Next days: {days}."
 
 # "use opus", "switch to haiku", "change model to sonnet", "model opus"; bare "model" shows it
 MODEL_RE = re.compile(r"(?:(?:switch|change)(?: the)?(?: chat)? model to|switch to|use|model)\s+"
@@ -150,10 +211,15 @@ async def chat_reply(message: discord.Message, text: str, images: list[discord.A
     # One message at a time per channel, so each reply continues the right session.
     lock = chat_locks.setdefault(message.channel.id, asyncio.Lock())
     async with lock, message.channel.typing():
+        system, model, tools = CHAT_PROMPT, chat_model(), LMS_TOOLS
+        if LMS_TOOLS:
+            system += LMS_NOTE + lms_now()
+            if MODELS.index(model) < MODELS.index(LMS_MODEL):   # haiku: lookups go to sonnet
+                tools = {**LMS_TOOLS, "tool_model": LMS_MODEL}
         try:
             answer, sid = await claude_backend.ask(
-                blocks, CHAT_PROMPT, resume=chat_sessions.get(message.channel.id),
-                model=chat_model())
+                blocks, system, resume=chat_sessions.get(message.channel.id),
+                model=model, **tools)
         except Exception as e:
             await message.reply(f"Error: {e}")
             return
