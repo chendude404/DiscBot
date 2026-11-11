@@ -1,7 +1,10 @@
 """
 How well a job fits you, by keyword rules (plain code, no Claude). Used to rank the job archive.
-Weights: strong boost +3, boost +1, penalty -2. These are the defaults you picked on 2026-10-28;
-change weights or add keywords from the archive's ⚙️ Filters screen (saved in archive.json).
+Weights: strong boost +3, core area +2, boost +1, penalty -2. Defaults retuned on 2026-11-10 so
+that with a minimum fit of 2 a plain SWE internship or any quant/trading role shows, other areas
+need two matches, and Bachelor's no longer counts (the CSCareers list has no degree info, so it
+only ever helped Simplify postings). Change weights or add keywords from the archive's ⚙️ Filters
+screen (saved in archive.json).
 """
 
 import functools
@@ -11,9 +14,8 @@ import re
 # job title (a description saying "full-time return offer" isn't a full-time job), else "any".
 # Short acronyms are matched case-sensitively so "AI" doesn't match "ai" inside other words' text.
 KEYWORDS = [
-    ("Quant", 3, r"(?i:\bquant(?:itative)?\b)", "any"),
-    ("Trading", 3, r"(?i:\btrad(?:ing|er|ers)\b)", "any"),
-    ("Software engineering", 1, r"(?i:\bsoftware (?:engineer(?:ing)?|development|developer)\b)|\bSWE\b|\bSDE\b", "any"),
+    ("Quant / trading", 2, r"(?i:\bquant(?:itative)?\b|\btrad(?:ing|er|ers)\b)", "any"),
+    ("Software engineering", 2, r"(?i:\bsoftware (?:engineer(?:ing)?|development|developer)\b)|\bSWE\b|\bSDE\b", "any"),
     ("Data science", 1, r"(?i:\bdata scien(?:ce|tist)\b)", "any"),
     ("ML / AI", 1, r"(?i:\bmachine learning\b|\bdeep learning\b)|\bML\b|\bAI\b", "any"),
     ("Embedded", 1, r"(?i:\bembedded\b|\bfirmware\b|\bmicrocontrollers?\b)", "any"),
@@ -23,14 +25,22 @@ KEYWORDS = [
     ("Market making / options", 1, r"(?i:\bmarket[- ]mak(?:ing|er)\b|\boptions\b|\bderivatives\b)", "any"),
     ("Finance", 1, r"(?i:\bhedge fund\b|\basset management\b|\binvestments?\b|\bfintech\b|\bpayments\b)", "any"),
     ("Research", 1, r"(?i:\bresearch(?:er)?\b|\bR&D\b)", "any"),
-    ("Cloud / infra", 1, r"(?i:\bcloud\b|\binfrastructure\b|\bdevops\b)|\bSRE\b|\bIT\b", "any"),
-    ("Bachelor's", 1, r"(?i:\bbachelor'?s?\b|\bundergrad(?:uate)?\b)|\bB\.?S\.?\b|\bB\.?A\.?\b", "any"),
-    ("Grad degree only", -2, r"(?i:\bph\.?d\.?\b|\bmaster'?s (?:degree )?required\b|\bgraduate students? only\b)", "any"),
+    ("Cloud / infra", 1, r"(?i:\bcloud\b|\binfrastructure\b|\bdevops\b)|\bSRE\b", "any"),
+    ("Bachelor's", 0, r"(?i:\bbachelor'?s?\b|\bundergrad(?:uate)?\b)|\bB\.?S\.?\b|\bB\.?A\.?\b", "any"),
+    # Any graduate degree, unless the posting is also open to undergrads (see EXCEPT).
+    ("Grad degree", -2, r"(?i:\bph\.?ds?\b|\bdoctoral\b|\bmaster'?s\b|\bgraduate (?:students?|degree|program|level)\b"
+                        r"|\bgrad students?\b)|\bMBA\b", "any"),
     ("Senior / full-time", -2, r"(?i:\bsenior\b|\bstaff\b|\bprincipal\b|\bnew grad\b|\bfull[- ]time\b)", "title"),
     ("Sales / marketing", -2, r"(?i:\bsales\b|\bmarketing\b|\baccount manager\b|\brecruit(?:ing|er)\b)", "title"),
+    ("Off-target", -2, r"(?i:\bbusiness analy|\bsupply chain\b|\bhuman resources\b|\btalent\b|\baccounting\b"
+                       r"|\bmechanical\b|\bcivil\b|\bmanufacturing\b|\bprocurement\b|\bhelp ?desk\b|\btechnician\b"
+                       r"|\bIT support\b)|\bHR\b", "title"),
 ]
 COMPILED = [(label, weight, re.compile(pattern), where) for label, weight, pattern, where in KEYWORDS]
-WEIGHTS = (3, 1, -2, 0)                # what tapping a keyword in the archive cycles through; 0 = off
+# A keyword that doesn't count when its exception also matches the posting.
+EXCEPT = {"Grad degree": re.compile(r"(?i)\bundergrad|\bbachelor"),
+          "Off-target": re.compile(r"(?i)\bsoftware (?:engineer|develop)")}   # "SWE Intern, HR Data"
+WEIGHTS = (3, 2, 1, -2, 0)             # what tapping a keyword in the archive cycles through; 0 = off
 MAX_KEYWORDS = 24                      # what fits on the archive's keyword screen
 
 
@@ -57,7 +67,8 @@ def score(job: dict, description: str = "", kws: list | None = None) -> tuple[in
     text = " ".join([title, job.get("company") or "", description])
     total, matched = 0, []
     for label, weight, rx, where in (kws if kws is not None else COMPILED):
-        if weight and rx.search(title if where == "title" else text):
+        if (weight and rx.search(title if where == "title" else text)
+                and not (label in EXCEPT and EXCEPT[label].search(text))):
             total += weight
             matched.append(f"{weight:+d} {label}")
     return total, matched

@@ -41,7 +41,7 @@ FEEDS = {
 }
 TERMS = ["Summer 2027", "Fall 2027", "Winter 2027", "Spring 2027"]    # internship seasons to pick from
 ROLES = {"intern": "Internships", "fulltime": "Full-time", "both": "Internships + full-time"}
-DEFAULT_SETTINGS = {"us_only": True, "roles": "intern", "term": "Summer 2027", "min_score": 3,
+DEFAULT_SETTINGS = {"us_only": True, "roles": "intern", "term": "Summer 2027", "min_score": 2,
                     "weights": {}, "custom": []}
 INTERN_RE = re.compile(r"(?i)\b(?:intern(?:ship)?s?|co-?op|summer (?:analyst|associate)|apprentice(?:ship)?"
                        r"|student|fellow(?:ship)?)\b")
@@ -360,7 +360,7 @@ FIXED_FOLDERS = [("all", "🗂️", "Everything"), ("new", "🆕", "Posted in th
 # Keyword folders: a posting is in one when it matches any of the group's keywords (as a boost).
 # Keywords you add in 🔑 Keywords go in ⭐ My keywords; Bachelor's only counts toward fit.
 GROUPS = [
-    ("grp:quant", "📈", "Quant & trading", {"Quant", "Trading", "Market making / options", "Finance"}),
+    ("grp:quant", "📈", "Quant & trading", {"Quant / trading", "Market making / options", "Finance"}),
     ("grp:software", "💻", "Software", {"Software engineering", "C++", "Cloud / infra"}),
     ("grp:data", "🤖", "Data & AI", {"Data science", "ML / AI", "Research"}),
     ("grp:hardware", "🔌", "Hardware & ECE", {"Embedded", "Hardware", "Signals / wireless"}),
@@ -388,7 +388,7 @@ class KeywordModal(discord.ui.Modal, title="Add a keyword"):
     name = discord.ui.TextInput(label="Name", placeholder="Robotics", max_length=30)
     words = discord.ui.TextInput(label="Words that match it (comma-separated)", max_length=200,
                                  placeholder="robotics, robot, autonomous")
-    weight = discord.ui.TextInput(label="Weight: 3 (strong), 1, or -2 (push down)", default="1", max_length=2)
+    weight = discord.ui.TextInput(label="Weight: 3 (strong), 2, 1, or -2 (push down)", default="1", max_length=2)
 
     def __init__(self, view: "ArchiveView"):
         super().__init__()
@@ -400,8 +400,8 @@ class KeywordModal(discord.ui.Modal, title="Add a keyword"):
             weight = int(self.weight.value.strip().replace("+", ""))
         except ValueError:
             weight = 0
-        if not words or weight not in fit.WEIGHTS[:3]:
-            await interaction.response.send_message("Give at least one word and a weight of 3, 1 or -2.",
+        if not words or weight not in fit.WEIGHTS[:4]:
+            await interaction.response.send_message("Give at least one word and a weight of 3, 2, 1 or -2.",
                                                     ephemeral=True)
             return
         custom = self.archive_view.archive.settings["custom"]
@@ -584,7 +584,7 @@ class ArchiveView(discord.ui.LayoutView):
     def _keywords(self, container, note):
         kws = fit.keywords(self.archive.settings)
         container.add_item(discord.ui.TextDisplay(
-            "## 🔑 Keywords\nTap one to change its weight: +3 → +1 → −2 → off. A posting's fit is the "
+            "## 🔑 Keywords\nTap one to change its weight: +3 → +2 → +1 → −2 → off. A posting's fit is the "
             "sum of the keywords in its title, company and listing details."
             + (f"\n{note}" if note else "")))
         container.add_item(discord.ui.Separator())
